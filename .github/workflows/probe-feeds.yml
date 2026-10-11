@@ -1,0 +1,17 @@
+name: probe-feeds
+# Diagnostics: query the live LMT/SLR feeds from GitHub's network and print what they contain,
+# including the CORS headers a GitHub Pages origin receives.
+on:
+  workflow_dispatch:
+  push:
+    paths: ["tools/probe-feeds.mjs", ".github/workflows/probe-feeds.yml"]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: node tools/probe-feeds.mjs

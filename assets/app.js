@@ -41,6 +41,8 @@
       {
         id: "SLR", mode: "train", one: "train", many: "trains", title: "Rail lines",
         area: C.SRI_LANKA, stopZoom: 10, schedule: true, speedUnit: "ms",
+        // Show trains that are running, plus trains waiting at their first station that leave within this many minutes.
+        preDepartMin: 30,
         staticPaths: ["/gtfs/download?agency=SLR", "/gtfs/download"],
         staticMirrors: [],
         // The SLR feed has no route colours; these keep each line recognisable.
@@ -74,7 +76,8 @@
     all: new Map(), markers: new Map(), prevPos: new Map(),
     hiddenRoutes: new Set(store.get("lmt-hidden-routes-v2", [])),
     mode: store.get("lmt-mode", "all"), FeedMessage: null, following: null, openKey: null,
-    userLoc: null, userMarker: null, tab: "vehicles", query: ""
+    userLoc: null, userMarker: null, tab: "vehicles", query: "",
+    favs: new Set(store.get("lmt-favs", [])), focus: null // focus = "SYS:routeId" while one route is singled out
   };
   if (!["all", "bus", "train"].includes(S.mode) || !S.systems.some(s => s.mode === S.mode)) S.mode = "all";
   const BUS = S.systems.find(s => s.mode === "bus"), TRAIN = S.systems.find(s => s.mode === "train");
@@ -197,7 +200,7 @@
     if (!html) { b.classList.remove("show"); b.dataset.kind = ""; return; }
     b.dataset.kind = kind; b.className = "banner show " + kind;
     b.innerHTML = html + '<button class="x" aria-label="Dismiss">✕</button>';
-    b.querySelector(".x").onclick = () => { b.classList.remove("show"); if (kind === "empty") S.emptyDismissed = true; };
+    b.querySelector(".x").onclick = () => { b.classList.remove("show"); if (kind === "empty") try { sessionStorage.setItem("lmt-empty-dismissed", "1"); } catch (e) { /* ignore */ } };
   }
   let toastT;
   function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600); }
@@ -351,13 +354,15 @@
     if (via === "json") parts.push("via JSON fallback");
     const empty = res.vehicles.length === 0;
     setFeed(sys, "vehicles", (age != null && age > 300) || (empty && sys.mode === "bus") ? "warn" : "ok", parts.join(" · "));
+    if (sys.gpsEmpty && !empty) toast("✓ Live " + sys.one + " GPS is back");
     sys.gpsEmpty = empty;
     if (sys.mode === "bus") {
       const kind = $("#banner").dataset.kind;
-      if (empty && kind !== "empty" && !S.emptyDismissed) {
-        banner("empty", "<b>LMT's live GPS feed is online but no buses are reporting right now.</b> " +
-          "The data provider hasn't published any bus positions, so buses are shown at their <b>⏱ scheduled positions</b> from the LMT timetable. " +
-          "Real GPS buses replace them automatically as soon as the feed has data.");
+      let dismissed = false; try { dismissed = sessionStorage.getItem("lmt-empty-dismissed") === "1"; } catch (e) { /* ignore */ }
+      if (empty && kind !== "empty" && !dismissed) {
+        banner("empty", "<b>Live bus GPS is offline</b> — showing ⏱ scheduled buses. " +
+          '<details><summary>Why?</summary>LMT\'s live feed is online but no buses are reporting, so buses are placed where the LMT timetable says they should be. ' +
+          "Real GPS buses replace them automatically as soon as the provider publishes positions again.</details>");
       } else if (!empty && (kind === "net" || kind === "empty")) banner();
     }
     if (sys.schedule) updateEstimates(sys, true);
@@ -384,7 +389,8 @@
     const skip = new Set(live.map(v => v.tripId).filter(Boolean));
     // Bus trip ids in the GPS feed are synthetic, so a route with live buses shows only those.
     const skipRoutes = sys.mode === "bus" ? new Set(live.map(v => v.routeId).filter(Boolean)) : null;
-    sys.est = C.scheduledVehicles(sys.static, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, skip, skipRoutes });
+    sys.est = C.scheduledVehicles(sys.static, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, skip, skipRoutes,
+      preDepartSec: (sys.preDepartMin || 0) * 60 });
     if (!quiet) reconcile();
   }
 
@@ -395,6 +401,11 @@
       sys.live.forEach(v => { v.sys = sys; v.key = sys.id + ":" + v.id; next.set(v.key, v); });
       sys.est.forEach(v => { v.sys = sys; v.key = sys.id + ":" + v.id; if (!next.has(v.key)) next.set(v.key, v); });
     });
+    // Vehicles waiting at the same station would sit on top of each other: give each a slot in a small ring.
+    const groups = new Map();
+    next.forEach(v => { const k = v.sys.id + "|" + (v.atStop || (v.lat.toFixed(4) + "," + v.lon.toFixed(4))); (groups.get(k) || groups.set(k, []).get(k)).push(v); });
+    groups.forEach(list => list.sort((a, b) => (a.departsAt || 0) - (b.departsAt || 0) || a.key.localeCompare(b.key))
+      .forEach((v, i) => { v.slot = list.length > 1 ? [i, list.length] : null; }));
     next.forEach(v => {
       const prev = S.prevPos.get(v.key);
       if (v.bearing == null && prev) {
@@ -460,22 +471,28 @@
     const color = r ? r.color : "#46505a", text = r ? r.text : "#fff";
     const code = r ? r.short : (v.routeCode || (train ? "Train" : "Bus"));
     const flip = v.bearing != null && v.bearing > 190 && v.bearing < 350;
-    const moving = !v.stale && (v.scheduled ? !v.atStop : (v.speedKmh == null ? false : v.speedKmh > 3));
+    const moving = !v.stale && !v.waiting && (v.scheduled ? !v.atStop : (v.speedKmh == null ? false : v.speedKmh > 3));
     const late = v.delay != null && v.delay >= 300;
+    const wait = v.waiting ? Math.max(0, Math.round((v.departsAt - nowS()) / 60)) : null;
     const cls = "veh " + (train ? "train" : "bus") + (v.scheduled ? " est" : " gps") + (v.stale ? " stale" : "") + (moving ? " moving" : "") +
-      (S.openKey === "veh:" + v.key ? " sel" : "") + (S.following === v.key ? " fol" : "");
+      (v.waiting ? " wait" : "") + (S.openKey === "veh:" + v.key ? " sel" : "") + (S.following === v.key ? " fol" : "") + (inFocus(v) ? "" : " dim");
     return '<div class="' + cls + '" style="--c:' + color + ";--t:" + text + '"><span class="ring"></span><span class="bob">' + (train ? trainSvg(flip) : busSvg(flip)) + "</span>" +
-      '<span class="tag">' + (v.scheduled ? '<i class="clk" title="Estimated from timetable"></i>' : '<i class="live" title="Live GPS"></i>') + esc(code) + (late ? '<b class="lt">+' + Math.round(v.delay / 60) + "</b>" : "") + "</span></div>";
+      '<span class="tag">' + (v.scheduled ? '<i class="clk" title="Estimated from timetable"></i>' : '<i class="live" title="Live GPS"></i>') + esc(code) +
+      (wait != null ? '<b class="dp">' + (wait < 1 ? "now" : wait + "′") + "</b>" : late ? '<b class="lt">+' + Math.round(v.delay / 60) + "</b>" : "") + "</span></div>";
   }
   function iconFor(v) {
     const train = v.sys.mode === "train";
-    return L.divIcon({ className: "veh-wrap", html: markerHtml(v), iconSize: train ? [66, 50] : [54, 54], iconAnchor: train ? [33, 30] : [27, 34], popupAnchor: [0, train ? -26 : -32] });
+    const size = train ? [66, 50] : [54, 54], anchor = train ? [33, 30] : [27, 34];
+    // Fan out vehicles sharing a station on a small ring (pixels, so it works at every zoom).
+    if (v.slot) { const [i, n] = v.slot, a = Math.PI + (2 * Math.PI * i) / n, rx = (train ? 36 : 30) + 3 * Math.min(n, 6), ry = 24 + 3 * Math.min(n, 6);
+      anchor[0] -= Math.round(Math.cos(a) * rx); anchor[1] -= Math.round(Math.sin(a) * ry); }
+    return L.divIcon({ className: "veh-wrap", html: markerHtml(v), iconSize: size, iconAnchor: anchor, popupAnchor: [size[0] / 2 - anchor[0], 4 - anchor[1]] });
   }
   function upsertMarker(v) {
-    const hide = !shown(v.sys) || (v.routeId && S.hiddenRoutes.has(v.sys.id + ":" + v.routeId));
+    const hide = !shown(v.sys) || (v.routeId && S.hiddenRoutes.has(v.sys.id + ":" + v.routeId)) || (S.focus && !inFocus(v));
     let m = S.markers.get(v.key);
     if (hide) { if (m) { map.removeLayer(m); S.markers.delete(v.key); } return; }
-    const html = markerHtml(v);
+    const html = markerHtml(v) + (v.slot ? v.slot.join("/") : "");
     if (!m) {
       const key = v.key;
       m = L.marker([v.lat, v.lon], { pane: "vehicles", icon: iconFor(v), keyboard: true, riseOnHover: true,
@@ -490,7 +507,7 @@
       glide(m, [v.lat, v.lon]);
     }
   }
-  function restyle(key) { const v = S.all.get(key), m = S.markers.get(key); if (v && m) { m._html = markerHtml(v); m.setIcon(iconFor(v)); } }
+  function restyle(key) { const v = S.all.get(key), m = S.markers.get(key); if (v && m) { m._html = markerHtml(v) + (v.slot ? v.slot.join("/") : ""); m.setIcon(iconFor(v)); } }
   const reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   function glide(m, to) {
     const from = m.getLatLng(); if (from.lat === to[0] && from.lng === to[1]) return;
@@ -502,34 +519,62 @@
   }
 
   /* ---------------- popups ---------------- */
+  const shareBtn = (hash, title) => '<button class="ib" data-share="' + esc(hash) + '" data-title="' + esc(title) + '" title="Share" aria-label="Share link">' + ICON.share + "</button>";
+  const favBtn = key => '<button class="ib fav' + (S.favs.has(key) ? " on" : "") + '" data-fav="' + esc(key) + '" title="' + (S.favs.has(key) ? "Remove from saved" : "Save this stop") + '" aria-pressed="' + S.favs.has(key) + '">' + (S.favs.has(key) ? "★" : "☆") + "</button>";
+  const ICON = { share: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v12M7 8l5-5 5 5M5 13v6h14v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' };
+  function relTime(t) { const m = Math.round((t - nowS()) / 60); return m <= 0 ? "now" : m < 60 ? "in " + m + " min" : "at " + clock(t); }
+  /** Origin → destination bar with the share of the trip done. */
+  function progressBar(sys, v) {
+    if (v.progress == null || !v.origin || !v.dest) return "";
+    return '<div class="prog"><div class="pe"><span>' + esc(stopName(sys, v.origin)) + "</span><span>" + esc(stopName(sys, v.dest)) + "</span></div>" +
+      '<div class="pb"><i style="width:' + Math.round(v.progress * 100) + '%"></i><b style="left:' + Math.round(v.progress * 100) + '%"></b></div></div>';
+  }
+  /** Stop-by-stop timeline: passed stops greyed, the current/next one highlighted. Long trips collapse their middle. */
+  function timeline(sys, v) {
+    const tl = v.timeline; if (!tl || tl.length < 2) return "";
+    const cur = tl.findIndex(x => !x.passed);
+    const rows = tl.map((x, i) => ({ x, i, cls: x.passed ? "past" : i === cur ? (v.atStop === x.stopId ? "here" : "next") : "" }));
+    let show = rows;
+    if (rows.length > 9) { const keep = new Set([0, rows.length - 1]); for (let i = Math.max(0, cur - 1); i <= Math.min(rows.length - 1, cur + 4); i++) keep.add(i); show = rows.filter(r => keep.has(r.i)); }
+    let prevI = -1;
+    return '<ol class="tl">' + show.map(r => { const gap = r.i - prevI > 1 ? '<li class="gap">⋮ ' + (r.i - prevI - 1) + " stops</li>" : ""; prevI = r.i;
+      return gap + '<li class="' + r.cls + '"><time>' + esc(clock(r.x.time)) + "</time><span>" + esc(stopName(sys, r.x.stopId)) + "</span></li>"; }).join("") + "</ol>";
+  }
   function vehiclePopup(v) {
     const sys = v.sys, r = routeOf(v), train = sys.mode === "train";
     const age = v.ts ? nowS() - v.ts : null;
-    let h = '<div class="pop">' + badge(r, v.routeCode) + (r && r.long ? '<div class="pl">' + esc(r.long) + "</div>" : "");
-    h += '<div class="src ' + (v.scheduled ? "est" : "gps") + '">' + (v.scheduled ? (train ? "⏱ Estimated from timetable" : "⏱ Scheduled position (no live GPS)") + (v.delay != null ? " + live delay" : "") : "● Live GPS") + "</div>";
-    if (train) h += '<div class="kv"><span>Train</span><b>' + esc(v.headsign || v.label) + "</b></div>";
-    else if (v.scheduled) h += '<div class="kv"><span>Trip</span><b>' + esc(v.headsign || v.label) + "</b></div>";
-    else h += '<div class="kv"><span>Bus</span><b>' + esc(v.label) + "</b></div>";
-    if (train && v.delay != null) h += '<div class="kv"><span>Running</span>' + delayChip(v.delay) + " " + esc(delayText(v.delay)) + "</div>";
-    if (v.atStop) h += '<div class="kv"><span>Now at</span>' + esc(stopName(sys, v.atStop)) + "</div>";
-    else if (v.stopId && sys.idx.stops[v.stopId]) h += '<div class="kv"><span>Status</span>' + esc((C.STOP_STATUS[v.status] || "Next stop") + " " + stopName(sys, v.stopId)) + "</div>";
-    else if (v.near && v.near.distance < 1500) h += '<div class="kv"><span>Near</span>' + esc(v.near.stop.name) + " (" + dist(v.near.distance) + ")</div>";
-    if (v.speedKmh != null) h += '<div class="kv"><span>Speed</span>' + Math.round(v.speedKmh) + " km/h</div>";
+    const title = train || v.scheduled ? (v.headsign || v.label) : v.label;
+    let h = '<div class="pop vp"><div class="ph">' + badge(r, v.routeCode) + '<div class="pt2"><b>' + esc(title) + "</b>" + (r && r.long ? "<small>" + esc(r.long) + "</small>" : "") + "</div></div>";
+    h += '<div class="src ' + (v.scheduled ? "est" : "gps") + '">' + (v.scheduled ? (train ? "⏱ Timetable position" : "⏱ Scheduled position — no live GPS") + (v.delay != null ? " · live delay applied" : "") : "● Live GPS") + "</div>";
+    const facts = [];
+    if (v.waiting) facts.push(["Departs", "<b>" + esc(relTime(v.departsAt)) + "</b> · " + esc(clock(v.departsAt)) + " from " + esc(stopName(sys, v.atStop))]);
+    else if (v.atStop) facts.push(["Now at", esc(stopName(sys, v.atStop))]);
+    else if (v.stopId && sys.idx.stops[v.stopId]) facts.push(["Status", esc((C.STOP_STATUS[v.status] || "Next stop") + " " + stopName(sys, v.stopId))]);
+    else if (v.near && v.near.distance < 1500) facts.push(["Near", esc(v.near.stop.name) + " (" + dist(v.near.distance) + ")"]);
+    const nx = !v.waiting && (v.upcoming || [])[0];
+    if (nx) facts.push(["Next stop", esc(stopName(sys, nx.stopId)) + " · <b>" + esc(relTime(nx.time)) + "</b> (" + esc(clock(nx.time)) + ")"]);
+    if ((train || v.scheduled) && v.dest) facts.push(["To", esc(stopName(sys, v.dest))]);
+    if (train && v.delay != null) facts.push(["Running", delayChip(v.delay) + " " + esc(delayText(v.delay))]);
+    if (!train && !v.scheduled) facts.push(["Bus", "<b>" + esc(v.label) + "</b>"]);
+    if (v.speedKmh != null) facts.push(["Speed", Math.round(v.speedKmh) + " km/h"]);
     const occ = v.occupancy && C.OCCUPANCY[v.occupancy];
-    if (occ) h += '<div class="kv"><span>Crowding</span>' + occ[1] + (v.occupancyPct != null ? " (" + v.occupancyPct + "%)" : "") + "</div>";
-    if (!v.scheduled) h += '<div class="kv"><span>Updated</span>' + (age != null ? C.ago(age) + (v.stale ? ' <em class="st">signal delayed</em>' : "") : "—") + "</div>";
-    const next = (v.upcoming || (sys.trip.byVehicle.get(v.id) || []).filter(x => !x.skipped).map(x => ({ stopId: x.stopId, time: x.time })))
-      .filter(x => x.time >= nowS() - 30).slice(0, train ? 5 : 4);
-    if (next.length) h += '<div class="nx"><div class="nh">Next stops' + (v.scheduled && v.delay == null ? " (timetable)" : "") + "</div>" +
-      next.map(x => '<div class="kv"><span>' + esc(clock(x.time)) + "</span>" + esc(stopName(sys, x.stopId)) + "</div>").join("") + "</div>";
+    if (occ) facts.push(["Crowding", occ[1] + (v.occupancyPct != null ? " (" + v.occupancyPct + "%)" : "")]);
+    if (!v.scheduled) facts.push(["Updated", age != null ? C.ago(age) + (v.stale ? ' <em class="st">signal delayed</em>' : "") : "—"]);
+    h += '<dl class="facts">' + facts.map(f => "<dt>" + f[0] + "</dt><dd>" + f[1] + "</dd>").join("") + "</dl>";
+    h += progressBar(sys, v);
+    if (v.timeline) h += '<details class="tlw"' + (S.tlOpen ? " open" : "") + '><summary>Stops &amp; times' + (v.scheduled && v.delay == null ? " (timetable)" : "") + "</summary>" + timeline(sys, v) + "</details>";
+    else {
+      const next = (v.upcoming || (sys.trip.byVehicle.get(v.id) || []).filter(x => !x.skipped).map(x => ({ stopId: x.stopId, time: x.time }))).filter(x => x.time >= nowS() - 30).slice(0, 4);
+      if (next.length) h += '<div class="nx"><div class="nh">Next stops</div>' + next.map(x => '<div class="kv"><span>' + esc(clock(x.time)) + "</span>" + esc(stopName(sys, x.stopId)) + "</div>").join("") + "</div>";
+    }
     if (v.scheduled && !train) h += '<div class="muted xs">No live GPS for this route right now — this is where the timetable says the bus should be.</div>';
-    if ((train || v.scheduled) && v.dest) h += '<div class="kv"><span>Terminates</span>' + esc(stopName(sys, v.dest)) + "</div>";
-    h += '<div class="acts"><button data-follow="' + esc(v.key) + '">' + (S.following === v.key ? "Following ✓" : "Follow " + sys.one) + "</button></div></div>";
+    h += '<div class="acts"><button class="btn" data-follow="' + esc(v.key) + '">' + (S.following === v.key ? "✓ Following" : "Follow " + sys.one) + "</button>" +
+      (r ? '<button class="btn ghost" data-focus="' + esc(sys.id + ":" + r.id) + '">Only ' + esc(r.short) + "</button>" : "") + shareBtn(sys.mode + "=" + v.id, title) + "</div></div>";
     return h;
   }
   function stopPopup(sys, s) {
     const arr = (sys.trip.byStop.get(s.id) || []).filter(x => x.time >= nowS() - 30 && !S.hiddenRoutes.has(sys.id + ":" + x.routeId)).slice(0, 6);
-    let h = '<div class="pop"><b class="pt">' + esc(s.name) + "</b>" + (s.code ? ' <span class="code">' + esc(s.code) + "</span>" : "");
+    let h = '<div class="pop"><div class="ph"><span class="stopi lg" aria-hidden="true"></span><div class="pt2"><b>' + esc(s.name) + "</b><small>Bus stop" + (s.code ? " · " + esc(s.code) : "") + "</small></div>" + favBtn(sys.id + ":" + s.id) + "</div>";
     if (arr.length) {
       h += '<div class="arr">' + arr.map(x => {
         const m = C.minutesUntil(x.time); const r = sys.idx.byId.get(x.routeId);
@@ -537,17 +582,19 @@
         return '<div class="ar' + (x.cancelled || x.skipped ? " off" : "") + '">' + badge(r, x.routeCode) + '<span class="w">' + esc(x.vehicleId || "") + "</span><b>" + when + '</b><span class="tm">' + clock(x.time) + "</span></div>";
       }).join("") + "</div>";
     } else {
+      const deps = sys.static && sys.static.schedule ? C.departures(sys.static, s.id, { limit: 4, horizonSec: 2 * 3600 }) : [];
+      if (deps.length) h += '<div class="nh">Scheduled (no live predictions)</div><div class="arr">' + deps.map(d => '<div class="ar">' + badge(sys.idx.byId.get(d.routeId)) + '<span class="w">' + esc(d.headsign) + "</span><b>" + esc(relTime(d.time)) + '</b><span class="tm">' + clock(d.time) + "</span></div>").join("") + "</div>";
+      else h += '<div class="muted sm">No live arrival predictions for this stop right now.</div>';
       const near = [...S.all.values()].filter(v => v.sys === sys).map(v => ({ v, d: C.distanceM(v.lat, v.lon, s.lat, s.lon) })).filter(x => x.d < 3000).sort((a, b) => a.d - b.d).slice(0, 3);
-      h += '<div class="muted sm">No live arrival predictions for this stop right now.</div>';
-      if (near.length) h += '<div class="nx"><div class="nh">Buses nearby</div>' + near.map(x => '<div class="kv">' + badge(routeOf(x.v), x.v.routeCode) + " " + esc(x.v.label) + " · " + dist(x.d) + "</div>").join("") + "</div>";
+      if (near.length) h += '<div class="nx"><div class="nh">Buses nearby</div>' + near.map(x => '<div class="kv">' + badge(routeOf(x.v), x.v.routeCode) + " " + esc(x.v.headsign || x.v.label) + " · " + dist(x.d) + "</div>").join("") + "</div>";
     }
-    return h + "</div>";
+    return h + '<div class="acts">' + shareBtn("stop=" + s.id, s.name) + "</div></div>";
   }
   function stationPopup(sys, s) {
     const deps = C.departures(sys.static, s.id, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, limit: 8 })
       .filter(d => !S.hiddenRoutes.has(sys.id + ":" + d.routeId));
-    let h = '<div class="pop"><b class="pt">🚉 ' + esc(s.name) + "</b>";
-    if (!deps.length) return h + '<div class="muted sm">No trains due in the next 3 hours.</div></div>';
+    let h = '<div class="pop"><div class="ph"><span class="stopi rail lg" aria-hidden="true"></span><div class="pt2"><b>' + esc(s.name) + "</b><small>Railway station</small></div>" + favBtn(sys.id + ":" + s.id) + "</div>";
+    if (!deps.length) return h + '<div class="muted sm">No trains due in the next 3 hours.</div><div class="acts">' + shareBtn("station=" + s.id, s.name) + "</div></div>";
     h += '<div class="board"><div class="bh"><span>Time</span><span>Train</span><span>Status</span></div>' + deps.map(d => {
       const r = sys.idx.byId.get(d.routeId); const m = C.minutesUntil(d.time);
       const status = d.cancelled ? '<b class="bad">Cancelled</b>' : d.delay != null ? delayChip(d.delay) : '<span class="muted">Scheduled</span>';
@@ -556,7 +603,7 @@
         '<i class="in">' + (m <= 0 ? "now" : m < 60 ? m + " min" : "") + "</i></span></div>";
     }).join("") + "</div>";
     h += '<div class="muted xs">Times from the SLR timetable' + (sys.trip.delays.size ? "; delays are live where reported." : ". No live delay data is published right now.") + "</div>";
-    return h + "</div>";
+    return h + '<div class="acts">' + shareBtn("station=" + s.id, s.name) + "</div></div>";
   }
   function refreshOpenPopup() {
     if (!S.openKey) return;
@@ -571,12 +618,36 @@
     m.setPopupContent(kind === "station" ? stationPopup(sys, sys.idx.stops[id]) : stopPopup(sys, sys.idx.stops[id]));
   }
   document.addEventListener("click", e => {
+    const fav = e.target.closest("[data-fav]");
+    if (fav) { const k = fav.dataset.fav; if (S.favs.has(k)) S.favs.delete(k); else S.favs.add(k); store.set("lmt-favs", [...S.favs]);
+      toast(S.favs.has(k) ? "★ Saved — find it at the top of Stops" : "Removed from saved"); refreshOpenPopup(); renderStops(); return; }
+    const sh = e.target.closest("[data-share]");
+    if (sh) { share(sh.dataset.share, sh.dataset.title); return; }
+    const fo = e.target.closest("[data-focus]");
+    if (fo) { const k = fo.dataset.focus, i = k.indexOf(":"); setFocus(k); showRoute(sysById(k.slice(0, i)), k.slice(i + 1)); return; }
+    if (e.target.closest("[data-unfocus]")) { setFocus(null); return; }
     const b = e.target.closest("[data-follow]"); if (!b) return;
     const key = b.dataset.follow; const prev = S.following; S.following = S.following === key ? null : key;
     const v = S.all.get(key); if (S.following && v) map.setView([v.lat, v.lon], Math.max(map.getZoom(), v.sys.mode === "train" ? 13 : 15));
     toast(S.following ? "Following " + (v ? (v.headsign || v.label) : "") : "Stopped following");
     if (prev) restyle(prev); restyle(key); refreshOpenPopup();
   });
+
+  document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("tlw")) S.tlOpen = e.target.open; }, true);
+  async function share(hash, title) {
+    const url = location.origin + location.pathname + location.search + "#" + hash;
+    try {
+      if (navigator.share) { await navigator.share({ title: (title || "LMT Live") + " — LMT Live", url }); return; }
+      await navigator.clipboard.writeText(url); toast("Link copied");
+    } catch (e) { if (e && e.name !== "AbortError") prompt("Copy this link:", url); }
+  }
+  /** Single out one route: other routes' vehicles hide, their lines fade, lists filter. */
+  function setFocus(key) {
+    S.focus = key || null;
+    S.systems.forEach(sys => sys.routeLayers.forEach((g, id) => g.setStyle({ opacity: !S.focus || S.focus === sys.id + ":" + id ? (sys.mode === "train" ? 0.7 : 0.8) : 0.12 })));
+    S.all.forEach(upsertMarker); refreshAll();
+    if (key) { const i = key.indexOf(":"), r = sysById(key.slice(0, i)).idx.byId.get(key.slice(i + 1)); toast("Showing only " + (r ? r.short : "this route") + " · Esc to show all"); }
+  }
 
   /* ---------------- realtime: predictions + alerts ---------------- */
   async function loadTripUpdates(sys) {
@@ -606,6 +677,9 @@
   }
 
   /* ---------------- panel rendering ---------------- */
+  /** Replace a container's HTML only when it changed, so hover, focus and scroll survive the frequent refreshes. */
+  function setHTML(el, html) { if (el._html !== html) { el._html = html; const top = el.parentNode ? el.parentNode.scrollTop : 0; el.innerHTML = html; if (el.parentNode) el.parentNode.scrollTop = top; } }
+  const inFocus = v => !S.focus || S.focus === v.sys.id + ":" + v.routeId;
   const match = (q, ...fields) => !q || fields.some(f => String(f || "").toLowerCase().includes(q));
   const visibleSystems = () => S.systems.filter(shown);
   const visibleVehicles = () => [...S.all.values()].filter(v => shown(v.sys));
@@ -625,28 +699,38 @@
     const age = v.ts ? nowS() - v.ts : null;
     const nx = (v.upcoming || [])[0];
     let where;
-    if (train || v.scheduled) where = v.atStop ? "At " + stopName(sys, v.atStop) : nx ? "Next: " + stopName(sys, nx.stopId) + " " + clock(nx.time) : "";
+    if (v.waiting) where = "Departs " + clock(v.departsAt) + " · " + relTime(v.departsAt) + " · " + stopName(sys, v.atStop);
+    else if (train || v.scheduled) where = v.atStop ? "At " + stopName(sys, v.atStop) + (nx ? " · next " + stopName(sys, nx.stopId) : "") : nx ? "Next: " + stopName(sys, nx.stopId) + " · " + relTime(nx.time) : "";
     else where = v.stopId && sys.idx.stops[v.stopId] ? (C.STOP_STATUS[v.status] || "Next") + " " + stopName(sys, v.stopId) : v.near && v.near.distance < 1500 ? "Near " + v.near.stop.name : (r && r.long) || "";
-    const meta = v.scheduled ? '<span class="src est">⏱ timetable</span>' : '<span class="src gps">● GPS</span>' + (v.speedKmh != null ? Math.round(v.speedKmh) + " km/h · " : " ") + (age != null ? C.ago(age) : "");
+    const meta = v.waiting ? '<span class="src wt">⏳ waiting to depart</span>' : v.scheduled ? '<span class="src est">⏱ timetable</span>' : '<span class="src gps">● GPS</span>' + (v.speedKmh != null ? Math.round(v.speedKmh) + " km/h · " : " ") + (age != null ? C.ago(age) : "");
     const occ = v.occupancy && C.OCCUPANCY[v.occupancy];
-    return '<button class="row' + (v.stale ? " stale" : "") + '" data-veh="' + esc(v.key) + '"><span class="vi ' + (train ? "train" : "bus") + '" style="--c:' + (r ? r.color : "#46505a") + '"></span>' + badge(r, v.routeCode) +
+    const bar = v.progress != null && !v.waiting ? '<span class="mini"><i style="width:' + Math.round(v.progress * 100) + '%"></i></span>' : "";
+    return '<button class="row' + (v.stale ? " stale" : "") + (v.waiting ? " waiting" : "") + (S.openKey === "veh:" + v.key ? " cur" : "") + '" data-veh="' + esc(v.key) + '"><span class="vi ' + (train ? "train" : "bus") + '" style="--c:' + (r ? r.color : "#46505a") + '"></span>' + badge(r, v.routeCode) +
       '<span class="main"><span class="t">' + esc(train || v.scheduled ? (v.headsign || v.label) : v.label) + "</span>" +
-      '<span class="s">' + esc(where) + "</span><span class=\"m\">" + meta + "</span></span>" +
+      '<span class="s">' + esc(where) + "</span>" + bar + '<span class="m">' + meta + "</span></span>" +
       (train ? delayChip(v.delay) : occ ? '<span class="chip ' + occ[0] + '">' + occ[1] + "</span>" : "") + "</button>";
+  }
+  function focusChip() {
+    if (!S.focus) return "";
+    const i = S.focus.indexOf(":"), sys = sysById(S.focus.slice(0, i)), r = sys && sys.idx.byId.get(S.focus.slice(i + 1));
+    return '<div class="focus">Showing only ' + badge(r) + " " + esc(r ? r.long || r.short : "") + '<button class="ib" data-unfocus title="Show all (Esc)" aria-label="Show all routes">✕</button></div>';
   }
   function renderVehicles() {
     const el = $("#pane-vehicles"); const q = S.query;
     const html = visibleSystems().map(sys => {
-      const all = [...S.all.values()].filter(v => v.sys === sys && !(v.routeId && S.hiddenRoutes.has(sys.id + ":" + v.routeId)));
+      const all = [...S.all.values()].filter(v => v.sys === sys && inFocus(v) && !(v.routeId && S.hiddenRoutes.has(sys.id + ":" + v.routeId)));
+      if (S.focus && !all.length && !S.focus.startsWith(sys.id + ":")) return "";
       const list = all.filter(v => match(q, v.label, v.headsign, v.routeCode, routeOf(v) && routeOf(v).long, routeOf(v) && routeOf(v).short, v.near && v.near.stop.name))
         .sort((a, b) => (!!a.scheduled - !!b.scheduled) || codeOf(a).localeCompare(codeOf(b), undefined, { numeric: true }) ||
           String(a.headsign || a.label).localeCompare(String(b.headsign || b.label)));
-      const live = all.filter(v => !v.scheduled).length;
-      const head = '<div class="grp">' + (sys.mode === "train" ? "🚆 Trains" : "🚌 Buses") + '<span>' + live + " live GPS" + (all.length - live ? " · " + (all.length - live) + " scheduled" : "") + "</span></div>";
-      if (list.length) return head + list.map(vehicleRow).join("");
-      return head + '<div class="empty">' + emptyVehicles(sys, all.length) + "</div>";
+      const moving = list.filter(v => !v.waiting), waiting = list.filter(v => v.waiting).sort((a, b) => a.departsAt - b.departsAt);
+      const live = all.filter(v => !v.scheduled).length, est = all.length - live - all.filter(v => v.waiting).length;
+      const head = '<div class="grp">' + (sys.mode === "train" ? "🚆 Trains" : "🚌 Buses") + '<span title="live GPS · timetable · departing soon">● ' + live + " live" + (est ? " · ⏱ " + est : "") + (waiting.length ? " · ⏳ " + waiting.length : "") + "</span></div>";
+      if (!list.length) return head + '<div class="empty">' + emptyVehicles(sys, all.length) + "</div>";
+      return head + moving.map(vehicleRow).join("") +
+        (waiting.length ? '<div class="sub">⏳ Departing in the next ' + (sys.preDepartMin || 30) + " min</div>" + waiting.map(vehicleRow).join("") : "");
     }).join("");
-    el.innerHTML = html || '<div class="empty">Nothing to show.</div>';
+    setHTML(el, focusChip() + (html || '<div class="empty">Nothing to show.</div>'));
   }
   function emptyVehicles(sys, total) {
     const f = sys.feeds.vehicles;
@@ -654,6 +738,7 @@
     if (sys.mode === "bus" && f && f.status === "err") return "Live bus positions are unavailable right now.<br><span class='sm'>" + esc(f.detail) + "</span>";
     if (sys.mode === "train" && !sys.static) return sys.feeds.static && sys.feeds.static.status === "err" ? "Train timetable unavailable right now.<br><span class='sm'>" + esc(sys.feeds.static.detail) + "</span>" : "Loading the train timetable…";
     if (!f && sys.mode === "bus") return "Connecting to live buses…";
+    if (sys.mode === "train" && sys.preDepartMin) return "No trains running or leaving in the next " + sys.preDepartMin + " min.";
     const mins = C.localMinutes(tz()); const [a, b] = sys.serviceHours;
     const off = mins < a || mins >= b;
     return "No " + sys.many + " running right now." + (off ? "<br><span class='sm'>" + (sys.mode === "bus" ? "Buses usually run " : "Most trains run ") + fmtMin(a) + "–" + fmtMin(b % 1440) + " (Colombo time).</span>" : "");
@@ -669,58 +754,65 @@
       if (!routes.length) return head + '<div class="empty">' + (sys.static ? "No routes match." : sys.feeds.static && sys.feeds.static.status === "err" ? "Route data unavailable." : "Loading routes…") + "</div>";
       return head + routes.map(r => {
         const n = counts.get(sys.id + ":" + r.id) || 0; const hasLine = (sys.static.routeShapes[r.id] || []).length > 0; const key = sys.id + ":" + r.id;
-        return '<div class="row rrow" data-route="' + esc(key) + '">' + badge(r) +
+        return '<div class="row rrow' + (S.focus === key ? " cur" : "") + '" data-route="' + esc(key) + '">' + badge(r) +
           '<span class="main"><span class="t">' + esc(r.long || r.short) + "</span>" +
           '<span class="m">' + (n ? '<b class="live">' + plural(n, sys) + " running</b>" : "none running now") + (hasLine ? "" : " · no line shape in feed") + "</span></span>" +
           '<label class="toggle" title="Show on map"><input type="checkbox" data-toggle="' + esc(key) + '" ' + (S.hiddenRoutes.has(key) ? "" : "checked") + ' aria-label="Show ' + esc(r.short) + ' on map"><span></span></label></div>';
       }).join("");
     }).join("");
-    el.innerHTML = html || '<div class="empty">Nothing to show.</div>';
+    setHTML(el, html || '<div class="empty">Nothing to show.</div>');
   }
 
+  function stopRow({ s, sys, d }, now, withNext) {
+    const train = sys.mode === "train", key = sys.id + ":" + s.id;
+    let nxt = "";
+    if (withNext && train) {
+      const dep = C.departures(sys.static, s.id, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, limit: 1, now })[0];
+      if (dep) nxt = '<span class="nxt">' + badge(sys.idx.byId.get(dep.routeId)) + "<b>" + esc(clock(dep.time)) + "</b></span>";
+    } else if (!train) {
+      const n = (sys.trip.byStop.get(s.id) || []).find(x => x.time >= now - 30 && !x.skipped && !x.cancelled);
+      if (n) nxt = '<span class="nxt">' + badge(sys.idx.byId.get(n.routeId), n.routeCode) + "<b>" + (C.minutesUntil(n.time) <= 0 ? "Due" : C.minutesUntil(n.time) + "′") + "</b></span>";
+    }
+    return '<button class="row" data-stop="' + esc(key) + '"><span class="stopi' + (train ? " rail" : "") + '" aria-hidden="true"></span>' +
+      '<span class="main"><span class="t">' + (S.favs.has(key) ? '<i class="star">★</i> ' : "") + esc(s.name) + "</span>" +
+      '<span class="m">' + (train ? "Railway station" : "Bus stop" + (s.code ? " · " + esc(s.code) : "")) + (d != null ? " · " + dist(d) : "") + "</span></span>" + nxt + "</button>";
+  }
   function renderStops() {
     const el = $("#pane-stops"); const q = S.query; const now = nowS();
     let list = [];
     visibleSystems().forEach(sys => sys.idx.platforms.forEach(s => { if (match(q, s.name, s.code)) list.push({ s, sys }); }));
     if (!list.length) {
       const loading = visibleSystems().some(s => !s.static && !(s.feeds.static && s.feeds.static.status === "err"));
-      el.innerHTML = '<div class="empty">' + (q ? "No stops or stations match “" + esc(q) + "”." : loading ? "Loading stops…" : "Stop data unavailable.") + "</div>"; return;
+      setHTML(el, loading && !q ? skeleton(6) : '<div class="empty">' + (q ? "No stops or stations match “" + esc(q) + "”." : "Stop data unavailable.") + "</div>"); return;
     }
     if (S.userLoc) list.forEach(x => { x.d = C.distanceM(S.userLoc[0], S.userLoc[1], x.s.lat, x.s.lon); });
     list.sort((a, b) => S.userLoc ? a.d - b.d : (a.sys.mode === b.sys.mode ? a.s.name.localeCompare(b.s.name) : a.sys.mode === "bus" ? -1 : 1));
+    const favs = list.filter(x => S.favs.has(x.sys.id + ":" + x.s.id));
     const shownList = list.slice(0, 200);
-    el.innerHTML = (S.userLoc ? '<div class="hint">Sorted by distance from you</div>' : "") + shownList.map(({ s, sys, d }) => {
-      const train = sys.mode === "train";
-      let nxt = "";
-      if (train && (q || S.userLoc || shownList.length <= 60)) {
-        const dep = C.departures(sys.static, s.id, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, limit: 1, now })[0];
-        if (dep) nxt = '<span class="nxt">' + badge(sys.idx.byId.get(dep.routeId)) + "<b>" + esc(clock(dep.time)) + "</b></span>";
-      } else if (!train) {
-        const n = (sys.trip.byStop.get(s.id) || []).find(x => x.time >= now - 30 && !x.skipped && !x.cancelled);
-        if (n) nxt = '<span class="nxt">' + badge(sys.idx.byId.get(n.routeId), n.routeCode) + "<b>" + (C.minutesUntil(n.time) <= 0 ? "Due" : C.minutesUntil(n.time) + "′") + "</b></span>";
-      }
-      return '<button class="row" data-stop="' + esc(sys.id + ":" + s.id) + '"><span class="stopi' + (train ? " rail" : "") + '" aria-hidden="true"></span>' +
-        '<span class="main"><span class="t">' + esc(s.name) + "</span>" +
-        '<span class="m">' + (train ? "Railway station" : "Bus stop" + (s.code ? " · " + esc(s.code) : "")) + (d != null ? " · " + dist(d) : "") + "</span></span>" + nxt + "</button>";
-    }).join("") + (list.length > shownList.length ? '<div class="hint">Showing 200 of ' + list.length + " — search to narrow down.</div>" : "");
+    const withNext = !!(q || S.userLoc || shownList.length <= 60);
+    setHTML(el, (favs.length ? '<div class="grp">★ Saved<span>' + favs.length + "</span></div>" + favs.map(x => stopRow(x, now, true)).join("") + '<div class="grp">All stops &amp; stations</div>' : "") +
+      (S.userLoc ? '<div class="hint">Sorted by distance from you</div>' : "") + shownList.map(x => stopRow(x, now, withNext)).join("") +
+      (list.length > shownList.length ? '<div class="hint">Showing 200 of ' + list.length + " — search to narrow down.</div>" : "") +
+      (!favs.length && !q ? '<div class="hint">Tip: open a stop and tap ☆ to save it here.</div>' : ""));
   }
+  const skeleton = n => '<div class="skel">' + Array.from({ length: n }, () => '<div class="sk"><i></i><span><b></b><b></b></span></div>').join("") + "</div>";
 
   function renderAlerts() {
     const el = $("#pane-alerts"); const q = S.query;
     const list = allAlerts().filter(a => match(q, a.header, a.description, a.routes.map(r => r.short).join(" ")));
     if (!list.length) {
       const fs = visibleSystems().map(s => s.feeds.alerts);
-      el.innerHTML = '<div class="empty">' + (fs.every(f => f && f.status === "err") ? "Service alerts are unavailable right now." : fs.some(f => !f) ? "Checking for service alerts…" : q ? "No alerts match." : "✓ No active service alerts.<br><span class='sm'>Good service reported.</span>") + "</div>";
+      setHTML(el, '<div class="empty">' + (fs.every(f => f && f.status === "err") ? "Service alerts are unavailable right now." : fs.some(f => !f) ? "Checking for service alerts…" : q ? "No alerts match." : '<span class="big">✓</span>No active service alerts.<br><span class="sm">Good service reported on every route.</span>') + "</div>");
       return;
     }
-    el.innerHTML = list.map(a => '<article class="alert ' + a.severity + '">' +
+    setHTML(el, list.map(a => '<article class="alert ' + a.severity + '">' +
       '<div class="meta">' + (a.sys.mode === "train" ? "🚆 Rail · " : "🚌 Bus · ") + esc(a.effect) + (a.cause ? " · " + esc(a.cause) : "") + (a.until ? " · until " + esc(clock(a.until)) : "") + "</div>" +
       '<h3 class="hd">' + esc(a.header) + "</h3>" +
       (a.routes.length ? '<div class="rts">' + a.routes.map(r => badge(r)).join("") + "</div>" : "") +
       (a.description ? '<p class="ds">' + esc(a.description).replace(/\n/g, "<br>") + "</p>" : "") +
       (a.stops.length ? '<div class="m">Stops: ' + a.stops.map(s => esc(s.name)).join(", ") + "</div>" : "") +
       (a.url && /^https?:\/\//i.test(a.url) ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">More information ↗</a>' : "") +
-      "</article>").join("");
+      "</article>").join(""));
   }
 
   /* ---------------- panel interactions ---------------- */
@@ -732,7 +824,8 @@
   $("#pane-routes").addEventListener("click", e => {
     if (e.target.closest(".toggle")) return;
     const n = e.target.closest("[data-route]"); if (!n) return;
-    const i = n.dataset.route.indexOf(":"); showRoute(sysById(n.dataset.route.slice(0, i)), n.dataset.route.slice(i + 1));
+    const k = n.dataset.route, i = k.indexOf(":");
+    setFocus(S.focus === k ? null : k); if (S.focus) { showRoute(sysById(k.slice(0, i)), k.slice(i + 1)); selectTab("vehicles"); }
   });
   $("#pane-routes").addEventListener("change", e => {
     const key = e.target.dataset.toggle; if (!key) return;
@@ -764,7 +857,7 @@
     if (!pts.length) { toast("No route line or vehicles to show for this route"); return; }
     collapseSheetOnMobile(); setHash("route", (sys.idx.byId.get(id) || {}).short || id);
     map.fitBounds(L.latLngBounds(pts), fitOpts(15, 40));
-    if (g) { g.setStyle({ weight: 8, opacity: 1 }); g.bringToFront(); setTimeout(() => g.setStyle({ weight: sys.mode === "train" ? 4 : 5, opacity: sys.mode === "train" ? 0.7 : 0.8 }), 1800); }
+    if (g) { g.setStyle({ weight: 8, opacity: 1 }); g.bringToFront(); setTimeout(() => g.setStyle({ weight: sys.mode === "train" ? 4 : 5, opacity: !S.focus || S.focus === sys.id + ":" + id ? (sys.mode === "train" ? 0.7 : 0.8) : 0.12 }), 1800); }
   }
 
   /* mode filter: All · Buses · Trains */
@@ -795,7 +888,42 @@
     const n = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length]; selectTab(n.dataset.pane); n.focus();
   });
   let qT; $("#q").addEventListener("input", e => { clearTimeout(qT); qT = setTimeout(() => { S.query = e.target.value.trim().toLowerCase(); refreshAll(); }, 120); });
-  $(".grab").addEventListener("click", () => $("#panel").classList.toggle("min"));
+  /* Bottom sheet (phones): drag the handle between peek, half and full; tap to cycle. */
+  (function sheet() {
+    const panel = $("#panel"), grab = $(".grab"); let y0 = null, h0 = 0, moved = false;
+    const snaps = () => [118, Math.round(innerHeight * 0.46), Math.round(innerHeight - $(".topbar").offsetHeight - 8)];
+    const setSnap = i => { panel.classList.toggle("min", i === 0); panel.classList.toggle("max", i === 2); panel.style.height = ""; };
+    grab.addEventListener("pointerdown", e => { if (!matchMedia("(max-width: 720px)").matches) return; y0 = e.clientY; h0 = panel.getBoundingClientRect().height; moved = false; grab.setPointerCapture(e.pointerId); panel.classList.add("drag"); });
+    grab.addEventListener("pointermove", e => { if (y0 == null) return; const dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true; const sn = snaps(); panel.style.height = Math.max(sn[0], Math.min(sn[2], h0 + dy)) + "px"; });
+    grab.addEventListener("pointerup", () => {
+      if (y0 == null) return; panel.classList.remove("drag"); const h = panel.getBoundingClientRect().height, sn = snaps(); y0 = null;
+      if (!moved) { const cur = panel.classList.contains("min") ? 0 : panel.classList.contains("max") ? 2 : 1; setSnap(cur === 0 ? 1 : cur === 1 ? 2 : 0); return; }
+      let best = 0; sn.forEach((v, i) => { if (Math.abs(v - h) < Math.abs(sn[best] - h)) best = i; }); setSnap(best);
+    });
+    grab.addEventListener("click", e => { if (!matchMedia("(max-width: 720px)").matches) return; e.preventDefault(); });
+    grab.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const cur = panel.classList.contains("min") ? 0 : panel.classList.contains("max") ? 2 : 1; setSnap((cur + 1) % 3); } });
+  })();
+
+  /* Keyboard: "/" search, Esc closes popup → clears route focus → clears search, 1–4 switch tabs. */
+  document.addEventListener("keydown", e => {
+    const typing = /INPUT|TEXTAREA|SELECT/.test((e.target.tagName || "")) || e.target.isContentEditable;
+    if (e.key === "/" && !typing) { e.preventDefault(); $("#q").focus(); $("#panel").classList.remove("min"); return; }
+    if (e.key === "Escape") {
+      if (map._popup && map.hasLayer(map._popup)) { map.closePopup(); return; }
+      if (S.focus) { setFocus(null); return; }
+      if (S.query || typing) { $("#q").value = ""; S.query = ""; refreshAll(); $("#q").blur(); }
+      return;
+    }
+    if (!typing && /^[1-4]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) selectTab(["vehicles", "routes", "stops", "alerts"][+e.key - 1]);
+  });
+  $("#q").addEventListener("keydown", e => { if (e.key === "Enter") { const first = $(".pane.show [data-veh], .pane.show [data-stop], .pane.show [data-route]"); if (first) first.click(); } });
+
+  /* Show everything: fit all visible systems. */
+  $("#fit").addEventListener("click", () => {
+    const b = L.latLngBounds([]); visibleSystems().forEach(sys => { const sb = systemBounds(sys); if (sb) b.extend(sb); });
+    S.all.forEach(v => { if (shown(v.sys) && inFocus(v)) b.extend([v.lat, v.lon]); });
+    if (b.isValid()) map.fitBounds(b, fitOpts(14));
+  });
 
   /* locate */
   $("#locate").addEventListener("click", () => {
@@ -871,8 +999,9 @@
   setInterval(updateStatus, 1000);
   function updateStatus() {
     const s = $("#status");
-    const parts = visibleSystems().map(sys => { const n = [...S.all.values()].filter(v => v.sys === sys).length, l = liveCount(sys);
-      return l === n ? plural(n, sys) : plural(l, sys).replace(/^(\d+) /, "$1 live ") + " + " + (n - l) + " ⏱ scheduled"; });
+    const parts = visibleSystems().map(sys => {
+      const mine = [...S.all.values()].filter(v => v.sys === sys), l = liveCount(sys), w = mine.filter(v => v.waiting).length, e = mine.length - l - w;
+      return (e || w ? plural(l, sys).replace(/^(\d+) /, "$1 live ") : plural(l, sys)) + (e ? " + " + e + " ⏱ scheduled" : "") + (w ? " + " + w + " ⏳ departing" : ""); });
     const busErr = BUS && shown(BUS) && BUS.feeds.vehicles && BUS.feeds.vehicles.status === "err";
     const lastOk = Math.max(0, ...S.systems.map(x => x.lastOk));
     if (!lastOk && !S.all.size) { s.textContent = busErr ? "Live feed unavailable" : "Connecting…"; s.className = "status" + (busErr ? " err" : ""); return; }
@@ -898,6 +1027,9 @@
     pollers.filter((p, i) => i % 3 === 0).forEach(p => p.run());
     applyHash(); setTimeout(applyHash, 1500);
   }
+  /* Installable + works offline (app shell only; live feeds are never cached). */
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => { /* optional */ });
+
   window.LMTApp = { state: S, config: CFG, refresh: runAll };
   boot();
 })();

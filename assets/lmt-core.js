@@ -305,7 +305,9 @@ message TranslatedString { repeated Translation translation=1; message Translati
   function serviceDays(tz, nowSec) {
     const today = localParts(tz, new Date(nowSec * 1000));
     const y = localParts(tz, new Date((nowSec - 86400) * 1000));
-    return [{ ymd: today.ymd, dow: today.dow, t: today.sec }, { ymd: y.ymd, dow: y.dow, t: today.sec + 86400 }];
+    const tm = localParts(tz, new Date((nowSec + 86400) * 1000));
+    return [{ ymd: today.ymd, dow: today.dow, t: today.sec }, { ymd: y.ymd, dow: y.dow, t: today.sec + 86400 },
+      { ymd: tm.ymd, dow: tm.dow, t: today.sec - 86400 }];
   }
 
   /* Shape geometry: cumulative distances and where each stop sits along the line. */
@@ -347,11 +349,21 @@ message TranslatedString { repeated Translation translation=1; message Translati
 
   /**
    * Where a scheduled trip is at `now`, shifted by `delay` seconds.
-   * Returns null if the trip isn't running. Includes the upcoming stops with their expected epoch times.
+   * Returns null if the trip isn't running — or, with `preDepartSec`, isn't waiting at its origin
+   * to leave within that many seconds (state.waiting). Includes upcoming stops, a full stop
+   * timeline and the share of the journey done (`progress`, by time).
    */
-  function tripState(sched, trip, stops, t, now, delay) {
+  function tripState(sched, trip, stops, t, now, delay, preDepartSec) {
     const st = trip.stops; const s = t - (delay || 0);
-    if (s < st[0][2] || s > st[st.length - 1][1]) return null;
+    const first = st[0][2], last = st[st.length - 1][1];
+    const timeline = () => st.map((r, i) => ({ stopId: r[0], time: now + ((i ? r[1] : r[2]) - s), passed: r[2] < s && i < st.length - 1 }));
+    if (s < first && preDepartSec && first - s <= preDepartSec) {
+      const O = stops[st[0][0]], n = stops[st[1][0]];
+      return { lat: O.lat, lon: O.lon, bearing: n ? bearingDeg(O.lat, O.lon, n.lat, n.lon) : null, atStop: st[0][0], waiting: true,
+        departsAt: now + (first - s), upcoming: st.slice(1).map(r => ({ stopId: r[0], time: now + (r[1] - s) })),
+        timeline: timeline(), progress: 0, origin: st[0][0], dest: st[st.length - 1][0], startTime: now + (first - s) };
+    }
+    if (s < first || s > last) return null;
     let pos = null, nextIdx = st.length - 1, atStop = null;
     for (let i = 0; i < st.length; i++) {
       if (s >= st[i][1] && s <= st[i][2]) { const S = stops[st[i][0]]; atStop = st[i][0]; nextIdx = Math.min(i + 1, st.length - 1);
@@ -368,13 +380,14 @@ message TranslatedString { repeated Translation translation=1; message Translati
       upcoming.push({ stopId: st[i][0], time: now + (st[i][1] - s) });
     }
     return Object.assign(pos, { atStop, upcoming, origin: st[0][0], dest: st[st.length - 1][0],
-      startTime: now + (st[0][2] - s) });
+      startTime: now + (first - s), timeline: timeline(), progress: Math.max(0, Math.min(1, (s - first) / ((last - first) || 1))) });
   }
 
   /**
    * Trains (or any scheduled vehicles) that should be on the line right now according to the timetable.
    * opts: {now, tz, delays: Map tripId→sec, cancelled: Set tripIds, skip: Set tripIds (have live GPS),
-   *        skipRoutes: Set routeIds (a route with live GPS shows only its real vehicles)}
+   *        skipRoutes: Set routeIds (a route with live GPS shows only its real vehicles),
+   *        preDepartSec: also include trips waiting at their origin that leave within this many seconds}
    */
   function scheduledVehicles(st, opts) {
     const sched = st && st.schedule; if (!sched) return [];
@@ -389,7 +402,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
       const delay = opts.delays && opts.delays.has(trip.id) ? opts.delays.get(trip.id) : null;
       for (const d of days) {
         if (!serviceRuns(sched, trip.svc, d.ymd, d.dow)) continue;
-        const state = tripState(sched, trip, st.stops, d.t, now, delay);
+        const state = tripState(sched, trip, st.stops, d.t, now, delay, opts.preDepartSec);
         if (!state) continue;
         out.push(Object.assign({ id: trip.id, label: trip.head, routeId: trip.route, tripId: trip.id, headsign: trip.head,
           scheduled: true, delay, ts: null, stale: false, speedKmh: null }, state));

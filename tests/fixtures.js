@@ -115,7 +115,8 @@ const hms = t => [Math.floor(t / 3600), Math.floor(t % 3600 / 60), t % 60].map(x
 function slrFiles(now) {
   const c = colombo(now); const base = c.sec < 4 * 3600 ? c.sec + 86400 : c.sec; // keep times on one service day
   const trips = [["TR_1", -10, "Colombo Fort → Panadura", false], ["TR_2", -4, "Colombo Fort → Panadura", false],
-    ["TR_3", 45, "Colombo Fort → Panadura", false], ["TR_4", -16, "Panadura → Colombo Fort", true], ["TR_5", -8, "Colombo Fort → Panadura", false]];
+    ["TR_3", 45, "Colombo Fort → Panadura", false], ["TR_4", -16, "Panadura → Colombo Fort", true], ["TR_5", -8, "Colombo Fort → Panadura", false],
+    ["TR_6", 12, "Colombo Fort → Panadura", false]];
   let st = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
   trips.forEach(([id, off, , rev]) => {
     const order = rev ? STATIONS.slice().reverse() : STATIONS;

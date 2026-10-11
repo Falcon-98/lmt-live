@@ -13,7 +13,25 @@ It's a static site: no backend, no build step, no API key. Put the folder on any
 - **3D vehicle markers**: every bus and train is a three-quarter-view vehicle in its route colour, with windows, livery stripe, headlight and spoked wheels. Each one is mirrored to face its direction of travel. Moving vehicles bob and spin their wheels. Hovering lifts a vehicle, and selected or followed vehicles pulse. A tag shows the route code, a green dot for live GPS or a ⏱ clock for timetable estimates, and a red `+N` when a train is running late. Vehicles shrink and drop their labels as you zoom out, and glide between updates.
 - **Live buses**: LMT GPS positions, refreshed every 10 s. When the GPS feed is empty, buses are shown at their **⏱ scheduled positions** from LMT's timetable. A banner, an amber status light and every popup say so, and real GPS buses replace them route by route as soon as data returns.
 - **Trains**: Sri Lanka Railways trains across the island (see *How trains are tracked* below). Each train shows its headsign, line, next stops with times, delay and final destination. Every station has a **departure board** listing the next 3 hours of trains, with live delays and cancellations where reported.
+- **Only relevant trains**: the map shows trains that are **running now**, plus trains **waiting at their first station that leave within the next 30 minutes**. Waiting trains show an amber countdown (`12′`), are listed under *Departing in the next 30 min*, and fan out side by side when several wait at the same station. The window is `preDepartMin` in the config.
 - **All / Buses / Trains filter** for the map, lists, counts and alerts.
+- **Better popups**:
+  - A journey progress bar from origin to destination.
+  - A collapsible stop-by-stop timeline, with passed stops dimmed and the next stop highlighted.
+  - The next stop with a countdown.
+  - **Follow**, **Only this route** and **Share** buttons.
+- **Route focus**: tap a route (or *Only CM01* in a popup) to see just that route's vehicles, with other lines faded. `Esc` or ✕ shows everything again.
+- **Saved stops**: tap ☆ in any stop or station popup. Saved stops stay at the top of the Stops tab.
+- **Faster to use**:
+  - `/` focuses search, `Enter` opens the first result, `Esc` goes back, and `1`–`4` switch tabs.
+  - A *Show everything* button and a map legend.
+  - On phones, a draggable bottom sheet with three positions (peek, half, full).
+- **Smoother**:
+  - Lists only re-render when something changed, so scroll position and hover survive the live updates.
+  - Skeleton placeholders appear while loading.
+  - A compact outage banner, remembered once dismissed.
+  - A toast when live GPS comes back.
+- **Installable and offline**: a web app manifest and icons let you add it to your home screen. A network-first service worker keeps the app shell working offline; live feeds are never cached, and new deploys load immediately.
 - **Accurate data only**: expired positions, duplicate records, other agencies' vehicles (e.g. trains), out-of-area and `0,0` fixes are filtered out. A position 3–15 minutes old is shown faded as "signal delayed". Anything older is dropped.
 - **Bus details**: the bus's plate, its route, the nearest stop, its speed, crowding (when the feed reports it), how long ago it last reported and its next stops from the trip-updates feed. You can **follow** a bus as it moves.
 - **Stops**: every platform stop, shown on the map from zoom 13. A stop's popup gives live arrival countdowns, marks skipped stops and cancelled trips, and lists nearby buses when the stop has no predictions. **Near me** sorts stops by distance.
@@ -114,6 +132,7 @@ Set any of these in `window.LMT_CONFIG`. The defaults are at the top of [`assets
 
 ```
 index.html               page shell
+manifest.webmanifest, sw.js   installable app + offline shell (network-first)
 assets/lmt-core.js       data layer: GTFS + GTFS-RT parsing, filtering, route matching (no DOM; runs in Node too)
 assets/app.js            map, panel, polling, popups
 assets/app.css           styles (light/dark, desktop dock / mobile sheet)

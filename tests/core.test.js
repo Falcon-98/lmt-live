@@ -113,3 +113,79 @@ test("decoder tolerates feeds missing fields that GTFS-RT marks required", () =>
   const r = C.processVehicles(decode(buf), idx, { now: NOW });
   assert.equal(r.vehicles.length, 0); assert.equal(r.stats.invalid, 1);
 });
+
+/* ---------------- Sri Lanka Railways timetable ---------------- */
+const slr = C.buildStatic(F.slrFiles(NOW), { agency: "SLR", schedule: true, colors: { Coast: "#1565c0" } });
+const slrIdx = C.indexStatic(slr);
+
+test("gtfsTime parses times past midnight", () => {
+  assert.equal(C.gtfsTime("25:10:30"), 90630);
+  assert.equal(C.gtfsTime("7:05:00"), 25500);
+  assert.equal(C.gtfsTime(""), null);
+});
+
+test("SLR static: colours from config, schedule built", () => {
+  assert.equal(slr.routes[0].color, "#1565c0");
+  assert.equal(slr.schedule.trips.length, 5);
+  assert.ok(slr.schedule.shapes.SHAPE_COAST_LINE.length > 5);
+});
+
+test("scheduled trains: running trips only, calendar exceptions respected, positions on the line", () => {
+  const v = C.scheduledVehicles(slr, { now: NOW });
+  const ids = v.map(x => x.id).sort();
+  assert.deepEqual(ids, ["TR_1", "TR_2", "TR_4"], "TR_3 not departed, TR_5 cancelled by calendar_dates");
+  const t1 = v.find(x => x.id === "TR_1");
+  assert.ok(C.inArea(t1.lat, t1.lon, C.SRI_LANKA));
+  assert.ok(t1.lat < 6.9344 && t1.lat > 6.713, "between Fort and Panadura");
+  assert.ok(t1.bearing > 90 && t1.bearing < 270, "southbound");
+  assert.ok(t1.upcoming.length >= 1 && t1.upcoming[0].time > NOW);
+  assert.equal(t1.scheduled, true);
+});
+
+test("scheduled trains: live delay shifts position, live GPS trips are skipped", () => {
+  const plain = C.scheduledVehicles(slr, { now: NOW }).find(x => x.id === "TR_2");
+  const late = C.scheduledVehicles(slr, { now: NOW, delays: new Map([["TR_2", 120]]), skip: new Set(["TR_4"]) });
+  const t2 = late.find(x => x.id === "TR_2");
+  assert.ok(t2.lat > plain.lat, "2 minutes late → still nearer Colombo Fort");
+  assert.equal(t2.delay, 120);
+  const notLeft = C.scheduledVehicles(slr, { now: NOW, delays: new Map([["TR_2", 360]]) });
+  assert.ok(!notLeft.find(x => x.id === "TR_2"), "6 min late on a train due 4 min ago → hasn't left yet");
+  assert.ok(!late.find(x => x.id === "TR_4"));
+});
+
+test("departures board: upcoming trains with delays, cancellations and arrivals", () => {
+  const dep = C.departures(slr, "ST_MORATUWA", { now: NOW, delays: new Map([["TR_2", 360]]), cancelled: new Set(["TR_3"]) });
+  assert.deepEqual(dep.map(d => d.tripId), ["TR_1", "TR_2", "TR_3"].filter(id => dep.some(d => d.tripId === id)));
+  const d2 = dep.find(d => d.tripId === "TR_2"); assert.equal(d2.time - d2.planned, 360);
+  const d3 = dep.find(d => d.tripId === "TR_3"); assert.ok(d3 && d3.cancelled);
+  assert.ok(!dep.find(d => d.tripId === "TR_5"));
+  const fort = C.departures(slr, "ST_COLOMBO_FORT", { now: NOW + 3600 });
+  assert.ok(fort.every(d => d.time >= NOW + 3600 - 60));
+});
+
+test("SLR live positions: train kept island-wide, bus from another agency dropped", () => {
+  const r = C.processVehicles(decode(F.slrVehiclesFeed(NOW)), slrIdx, { now: NOW, area: C.SRI_LANKA, agency: "SLR", speedUnit: "ms" });
+  assert.deepEqual(r.vehicles.map(v => v.id), ["8058"]);
+  assert.equal(Math.round(r.vehicles[0].speedKmh), 54);
+  const info = C.tripUpcoming(slr, "TR_4", { now: NOW });
+  assert.ok(info.headsign.includes("Colombo Fort"));
+});
+
+test("SLR trip updates: trip-level delays collected", () => {
+  const tu = C.processTripUpdates(decode(F.slrTripUpdatesFeed(NOW)), slrIdx, { now: NOW, agency: "SLR" });
+  assert.equal(tu.delays.get("TR_2"), 360);
+});
+
+test("trip updates: months-old updates are ignored", () => {
+  const buf = F.FeedMessage.encode(F.FeedMessage.fromObject({ header: { gtfs_realtime_version: "2.0", timestamp: NOW }, entity: [
+    { id: "old", trip_update: { trip: { trip_id: "TR_2" }, timestamp: NOW - 90 * 86400, stop_time_update: [{ arrival: { delay: 223 } }] } }] })).finish();
+  const tu = C.processTripUpdates(decode(buf), slrIdx, { now: NOW, agency: "SLR" });
+  assert.equal(tu.count, 0); assert.equal(tu.stale, 1); assert.ok(!tu.delays.has("TR_2"));
+});
+
+test("single-agency feed with a partial timetable keeps all its stops", () => {
+  const f = Object.assign({}, F.files, { trips: "trip_id,route_id,service_id\nT1," + F.CM01 + ",D\n", stop_times: "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,06:00:00,06:00:00,101,1\nT1,06:05:00,06:05:00,102,2\n" });
+  const s = C.buildStatic(f, { agency: "LMT", schedule: true });
+  assert.equal(C.indexStatic(s).platforms.length, 9);
+  assert.equal(s.schedule.trips.length, 1);
+});

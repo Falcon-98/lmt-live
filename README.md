@@ -11,7 +11,7 @@ It's a static site: no backend, no build step, no API key. Put the folder on any
 ## Features
 
 - **3D vehicle markers**: every bus and train is a three-quarter-view vehicle in its route colour, with windows, livery stripe, headlight and spoked wheels. Each one is mirrored to face its direction of travel. Moving vehicles bob and spin their wheels. Hovering lifts a vehicle, and selected or followed vehicles pulse. A tag shows the route code, a green dot for live GPS or a ⏱ clock for timetable estimates, and a red `+N` when a train is running late. Vehicles shrink and drop their labels as you zoom out, and glide between updates.
-- **Live buses**: LMT GPS positions, refreshed every 10 s.
+- **Live buses**: LMT GPS positions, refreshed every 10 s. When the GPS feed is empty, buses are shown at their **⏱ scheduled positions** from LMT's timetable. A banner, an amber status light and every popup say so, and real GPS buses replace them route by route as soon as data returns.
 - **Trains**: Sri Lanka Railways trains across the island (see *How trains are tracked* below). Each train shows its headsign, line, next stops with times, delay and final destination. Every station has a **departure board** listing the next 3 hours of trains, with live delays and cancellations where reported.
 - **All / Buses / Trains filter** for the map, lists, counts and alerts.
 - **Accurate data only**: expired positions, duplicate records, other agencies' vehicles (e.g. trains), out-of-area and `0,0` fixes are filtered out. A position 3–15 minutes old is shown faded as "signal delayed". Anything older is dropped.
@@ -26,6 +26,17 @@ It's a static site: no backend, no build step, no API key. Put the folder on any
 - Mobile-first bottom sheet, dark/light theme (the map darkens too), keyboard-navigable tabs, honours reduced-motion.
 
 ---
+
+## Live data status (checked 11 Oct 2026)
+
+A diagnostic workflow ([`probe-feeds`](.github/workflows/probe-feeds.yml)) and a real-browser smoke test ([`live-smoke`](.github/workflows/live-smoke.yml)) query the live feeds from GitHub's servers. Their findings:
+
+- **CORS works.** The feed server allows the GitHub Pages origin (`https://falcon-98.github.io`), and the static GTFS downloads fine.
+- **The LMT live GPS feed is online but empty** (0 vehicles). The upstream bridge reports 38–40 buses in its registry, but its last telemetry poll was on **9 Oct 2026, 15:16 UTC**, so no positions are reaching the feed. This is a data-provider outage and can't be fixed from this app. Buses appear automatically as soon as the provider publishes positions again.
+- **Trip updates are stale** (55–100 days old), so the app ignores updates older than 2 hours.
+- **The LMT timetable now covers 7 routes, 185 stops and 56 trips.** While GPS is empty, the app places buses at their **⏱ scheduled positions** and labels them as such. A banner explains that live GPS is unavailable.
+
+Run either workflow from the Actions tab to re-check at any time; `live-smoke` also runs every 6 hours.
 
 ## How trains are tracked
 

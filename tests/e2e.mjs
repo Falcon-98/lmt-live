@@ -14,7 +14,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHOTS = path.join(ROOT, "tests", "screenshots");
 fs.mkdirSync(SHOTS, { recursive: true });
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png" };
-let mode = "ok"; // "ok" | "down" | "slr-no-rt"
+let mode = "ok"; // "ok" | "down" | "slr-no-rt" | "lmt-empty" (GPS feed online but empty, as observed live on 2026-10-11)
 let hits = {};
 
 const server = http.createServer(async (req, res) => {
@@ -34,6 +34,11 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(404); return res.end();
     }
     if (agency !== "LMT") { res.writeHead(400); return res.end("agency param missing"); }
+    if (mode === "lmt-empty") {
+      if (ep === "gtfs/download") return send(await F.lmtScheduledZip(now), "application/zip");
+      if (ep.startsWith("realtime/vehicle-positions/list")) return send("[]", "application/json");
+      return send(F.emptyFeed(now), "application/x-protobuf");
+    }
     if (ep === "gtfs/download") return send(await F.staticZip(), "application/zip");
     if (ep === "realtime/vehicle-positions") return send(F.vehiclesFeed(now), "application/x-protobuf");
     if (ep === "realtime/trip-updates") return send(F.tripUpdatesFeed(now), "application/x-protobuf");
@@ -81,7 +86,7 @@ try {
   check(await page.locator("#c-routes").textContent() === "3", "3 routes (2 bus + 1 rail line)");
   check(await page.locator("#c-stops").textContent() === "15", "15 stops (9 bus stops + 6 stations)");
   check((await page.locator(".leaflet-routes-pane path").count()) === 3, "2 CM01 shapes + Coast Line drawn");
-  check(/Live · 4 buses · 2 trains/.test(await page.locator("#status").textContent()), "status line counts buses and trains");
+  check(/Live · 4 buses · 1 live train \+ 1 ⏱ scheduled/.test(await page.locator("#status").textContent()), "status line counts buses and trains, live vs scheduled");
   check(await page.locator("#h-bus").getAttribute("class") === "dot ok" && await page.locator("#h-train").getAttribute("class") === "dot ok", "bus and train feeds healthy");
   check(await page.locator("#c-alerts").textContent() === "3", "3 alerts (2 bus + 1 rail)");
   await page.screenshot({ path: path.join(SHOTS, "desktop.png") });
@@ -180,6 +185,24 @@ try {
   check(await p4.page.locator("#h-train").getAttribute("class") === "dot warn", "train status shows timetable-only (amber)");
   check(!(await p4.page.locator("#banner.show").count()), "no error banner for missing train realtime");
   await p4.page.close();
+
+  console.log("LMT GPS feed online but empty (the real situation on 2026-10-11)");
+  mode = "lmt-empty";
+  const p5 = await open({ width: 1280, height: 800 }, "/?api=" + encodeURIComponent(base + "/api/v1") + "&trains=0");
+  await p5.page.waitForFunction(() => document.querySelector("#banner.show") && document.querySelectorAll(".veh.bus").length >= 1, null, { timeout: 15000 });
+  await p5.page.waitForTimeout(800);
+  check((await p5.page.locator(".veh.bus.est").count()) === 1 && (await p5.page.locator(".veh.bus.gps").count()) === 0, "running CM01 trip shown at its ⏱ scheduled position, nothing passed off as GPS");
+  check(/online but no buses are reporting/.test(await p5.page.locator("#banner").textContent()), "banner explains the GPS feed is empty");
+  const st5 = await p5.page.locator("#status").textContent();
+  check(/0 live buses \+ 1 ⏱ scheduled/.test(st5), "status line separates live from scheduled (" + st5 + ")");
+  check(await p5.page.locator("#h-bus").getAttribute("class") === "dot warn", "bus light amber while GPS is empty");
+  check(await p5.page.locator("#c-stops").textContent() === "9", "all bus stops kept although the timetable covers only CM01");
+  await p5.page.locator('[data-veh^="LMT:TRIP_CM01_D0_T1"]').click();
+  await p5.page.waitForTimeout(600);
+  check(/Scheduled position \(no live GPS\)/.test(await p5.page.locator(".leaflet-popup .pop").textContent()), "scheduled bus popup says it is not GPS");
+  check(p5.errors.length === 0, "no page errors" + (p5.errors.length ? ": " + p5.errors.join(" | ") : ""));
+  await p5.page.screenshot({ path: path.join(SHOTS, "lmt-empty.png") });
+  await p5.page.close();
 
   console.log("Feed down (no cache)");
   mode = "down";

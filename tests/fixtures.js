@@ -156,5 +156,21 @@ function slrAlertsFeed(now) {
   ] });
 }
 
-module.exports = { CM01, CM02, files, staticZip, vehiclesFeed, tripUpdatesFeed, alertsFeed, FeedMessage,
+/** LMT static with a timetable (as the producer now publishes): one CM01 trip running now, one later. */
+async function lmtScheduledZip(now) {
+  const c = colombo(now); const base = c.sec < 4 * 3600 ? c.sec + 86400 : c.sec;
+  const order = ["101", "102", "103", "104", "105"];
+  let st = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
+  [["TRIP_CM01_D0_T1", -7], ["TRIP_CM01_D0_T2", 90]].forEach(([id, off]) =>
+    order.forEach((sid, i) => { const t = base + off * 60 + i * 5 * 60; st += id + "," + hms(t) + "," + hms(t) + "," + sid + "," + (i + 1) + "\n"; }));
+  const zip = new JSZip();
+  for (const [k, v] of Object.entries(files)) if (v) zip.file(k + ".txt", v);
+  zip.file("trips.txt", "trip_id,route_id,service_id,trip_headsign,shape_id\nTRIP_CM01_D0_T1," + CM01 + ",SERV_LMT_DAILY,Kadawatha via CM01,SHAPE_CM01_D0\nTRIP_CM01_D0_T2," + CM01 + ",SERV_LMT_DAILY,Kadawatha via CM01,SHAPE_CM01_D0\n");
+  zip.file("stop_times.txt", st);
+  zip.file("calendar.txt", "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nSERV_LMT_DAILY,1,1,1,1,1,1,1,20200101,20991231\n");
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+function emptyFeed(now) { return encode({ header: { gtfs_realtime_version: "2.0", incrementality: "FULL_DATASET", timestamp: Math.round(now) }, entity: [] }); }
+
+module.exports = { CM01, CM02, files, staticZip, lmtScheduledZip, emptyFeed, vehiclesFeed, tripUpdatesFeed, alertsFeed, FeedMessage,
   slrFiles, slrZip, slrVehiclesFeed, slrTripUpdatesFeed, slrAlertsFeed, colombo };

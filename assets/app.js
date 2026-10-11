@@ -26,7 +26,9 @@
     systems: [
       {
         id: "LMT", mode: "bus", one: "bus", many: "buses", title: "Bus routes",
-        area: C.SERVICE_AREA, stopZoom: 13, schedule: false,
+        area: C.SERVICE_AREA, stopZoom: 13,
+        // LMT now publishes trips + stop_times: when the GPS feed is empty, buses are placed from the timetable (labelled ⏱).
+        schedule: true,
         speedUnit: "kmh", // the LMT producer publishes km/h (GTFS-RT says m/s); ?speed=ms switches
         staticPaths: ["/gtfs/download?agency=LMT"],
         // Mobility Database mirrors of feed mdb-3490, tried if the producer download fails.
@@ -171,6 +173,7 @@
     }
     return f.vehicles ? f.vehicles.status : "";
   }
+  const liveCount = sys => [...S.all.values()].filter(v => v.sys === sys && !v.scheduled).length;
   function renderHealth() {
     S.systems.forEach(sys => {
       const el = $("#h-" + sys.mode); if (!el) return;
@@ -194,14 +197,14 @@
     if (!html) { b.classList.remove("show"); b.dataset.kind = ""; return; }
     b.dataset.kind = kind; b.className = "banner show " + kind;
     b.innerHTML = html + '<button class="x" aria-label="Dismiss">✕</button>';
-    b.querySelector(".x").onclick = () => b.classList.remove("show");
+    b.querySelector(".x").onclick = () => { b.classList.remove("show"); if (kind === "empty") S.emptyDismissed = true; };
   }
   let toastT;
   function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600); }
 
   /* ---------------- static GTFS ---------------- */
-  const cacheKey = sys => "lmt-static-v3-" + sys.id;
-  try { localStorage.removeItem("lmt-static-v2"); localStorage.removeItem("lmt-hidden-routes"); } catch (e) { /* ignore */ }
+  const cacheKey = sys => "lmt-static-v4-" + sys.id;
+  try { ["lmt-static-v2", "lmt-static-v3-LMT", "lmt-static-v3-SLR", "lmt-hidden-routes"].forEach(k => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
   async function downloadStatic(sys) {
     const tries = sys.staticPaths.map(p => () => apiFetch(p, 60000)).concat(sys.staticMirrors.map(u => () => fetchWithTimeout(u, 60000)));
     let last;
@@ -346,8 +349,17 @@
     if (st.total) parts.push(st.total + " records in feed" + (st.stale ? ", " + st.stale + " expired" : "") + (st.foreign ? ", " + st.foreign + " other services" : "") + (st.duplicate ? ", " + st.duplicate + " duplicates" : ""));
     if (age != null) parts.push("feed generated " + C.ago(age));
     if (via === "json") parts.push("via JSON fallback");
-    setFeed(sys, "vehicles", age != null && age > 300 ? "warn" : "ok", parts.join(" · "));
-    if (sys.mode === "bus" && $("#banner").dataset.kind === "net") banner();
+    const empty = res.vehicles.length === 0;
+    setFeed(sys, "vehicles", (age != null && age > 300) || (empty && sys.mode === "bus") ? "warn" : "ok", parts.join(" · "));
+    sys.gpsEmpty = empty;
+    if (sys.mode === "bus") {
+      const kind = $("#banner").dataset.kind;
+      if (empty && kind !== "empty" && !S.emptyDismissed) {
+        banner("empty", "<b>LMT's live GPS feed is online but no buses are reporting right now.</b> " +
+          "The data provider hasn't published any bus positions, so buses are shown at their <b>⏱ scheduled positions</b> from the LMT timetable. " +
+          "Real GPS buses replace them automatically as soon as the feed has data.");
+      } else if (!empty && (kind === "net" || kind === "empty")) banner();
+    }
     if (sys.schedule) updateEstimates(sys, true);
     reconcile();
   }
@@ -368,8 +380,11 @@
   /** Timetable positions for trips without live GPS. */
   function updateEstimates(sys, quiet) {
     if (!sys.static || !sys.static.schedule) { sys.est = []; return; }
-    const skip = new Set([...sys.live.values()].map(v => v.tripId).filter(Boolean));
-    sys.est = C.scheduledVehicles(sys.static, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, skip });
+    const live = [...sys.live.values()].filter(v => !v.stale);
+    const skip = new Set(live.map(v => v.tripId).filter(Boolean));
+    // Bus trip ids in the GPS feed are synthetic, so a route with live buses shows only those.
+    const skipRoutes = sys.mode === "bus" ? new Set(live.map(v => v.routeId).filter(Boolean)) : null;
+    sys.est = C.scheduledVehicles(sys.static, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, skip, skipRoutes });
     if (!quiet) reconcile();
   }
 
@@ -397,7 +412,7 @@
     });
     S.all = next;
     renderCounts(); renderVehicles(); if (S.tab === "routes") renderRoutes();
-    refreshOpenPopup();
+    refreshOpenPopup(); updateStatus();
     if (S.following && S.all.has(S.following)) { const v = S.all.get(S.following); map.panTo([v.lat, v.lon], { animate: true }); }
   }
 
@@ -491,8 +506,9 @@
     const sys = v.sys, r = routeOf(v), train = sys.mode === "train";
     const age = v.ts ? nowS() - v.ts : null;
     let h = '<div class="pop">' + badge(r, v.routeCode) + (r && r.long ? '<div class="pl">' + esc(r.long) + "</div>" : "");
-    h += '<div class="src ' + (v.scheduled ? "est" : "gps") + '">' + (v.scheduled ? "⏱ Estimated from timetable" + (v.delay != null ? " + live delay" : "") : "● Live GPS") + "</div>";
+    h += '<div class="src ' + (v.scheduled ? "est" : "gps") + '">' + (v.scheduled ? (train ? "⏱ Estimated from timetable" : "⏱ Scheduled position (no live GPS)") + (v.delay != null ? " + live delay" : "") : "● Live GPS") + "</div>";
     if (train) h += '<div class="kv"><span>Train</span><b>' + esc(v.headsign || v.label) + "</b></div>";
+    else if (v.scheduled) h += '<div class="kv"><span>Trip</span><b>' + esc(v.headsign || v.label) + "</b></div>";
     else h += '<div class="kv"><span>Bus</span><b>' + esc(v.label) + "</b></div>";
     if (train && v.delay != null) h += '<div class="kv"><span>Running</span>' + delayChip(v.delay) + " " + esc(delayText(v.delay)) + "</div>";
     if (v.atStop) h += '<div class="kv"><span>Now at</span>' + esc(stopName(sys, v.atStop)) + "</div>";
@@ -506,7 +522,8 @@
       .filter(x => x.time >= nowS() - 30).slice(0, train ? 5 : 4);
     if (next.length) h += '<div class="nx"><div class="nh">Next stops' + (v.scheduled && v.delay == null ? " (timetable)" : "") + "</div>" +
       next.map(x => '<div class="kv"><span>' + esc(clock(x.time)) + "</span>" + esc(stopName(sys, x.stopId)) + "</div>").join("") + "</div>";
-    if (train && v.dest) h += '<div class="kv"><span>Terminates</span>' + esc(stopName(sys, v.dest)) + "</div>";
+    if (v.scheduled && !train) h += '<div class="muted xs">No live GPS for this route right now — this is where the timetable says the bus should be.</div>';
+    if ((train || v.scheduled) && v.dest) h += '<div class="kv"><span>Terminates</span>' + esc(stopName(sys, v.dest)) + "</div>";
     h += '<div class="acts"><button data-follow="' + esc(v.key) + '">' + (S.following === v.key ? "Following ✓" : "Follow " + sys.one) + "</button></div></div>";
     return h;
   }
@@ -592,7 +609,8 @@
   const match = (q, ...fields) => !q || fields.some(f => String(f || "").toLowerCase().includes(q));
   const visibleSystems = () => S.systems.filter(shown);
   const visibleVehicles = () => [...S.all.values()].filter(v => shown(v.sys));
-  const allAlerts = () => visibleSystems().flatMap(s => s.alerts);
+  // The realtime endpoints ignore ?agency=, so the same alert can reach both systems: de-duplicate.
+  const allAlerts = () => { const seen = new Set(); return visibleSystems().flatMap(s => s.alerts).filter(a => { const k = a.id + "|" + a.header; if (seen.has(k)) return false; seen.add(k); return true; }); };
   function refreshAll() { renderCounts(); renderVehicles(); renderRoutes(); renderStops(); renderAlerts(); }
   function renderCounts() {
     const vs = visibleSystems();
@@ -607,12 +625,12 @@
     const age = v.ts ? nowS() - v.ts : null;
     const nx = (v.upcoming || [])[0];
     let where;
-    if (train) where = v.atStop ? "At " + stopName(sys, v.atStop) : nx ? "Next: " + stopName(sys, nx.stopId) + " " + clock(nx.time) : "";
+    if (train || v.scheduled) where = v.atStop ? "At " + stopName(sys, v.atStop) : nx ? "Next: " + stopName(sys, nx.stopId) + " " + clock(nx.time) : "";
     else where = v.stopId && sys.idx.stops[v.stopId] ? (C.STOP_STATUS[v.status] || "Next") + " " + stopName(sys, v.stopId) : v.near && v.near.distance < 1500 ? "Near " + v.near.stop.name : (r && r.long) || "";
     const meta = v.scheduled ? '<span class="src est">⏱ timetable</span>' : '<span class="src gps">● GPS</span>' + (v.speedKmh != null ? Math.round(v.speedKmh) + " km/h · " : " ") + (age != null ? C.ago(age) : "");
     const occ = v.occupancy && C.OCCUPANCY[v.occupancy];
     return '<button class="row' + (v.stale ? " stale" : "") + '" data-veh="' + esc(v.key) + '"><span class="vi ' + (train ? "train" : "bus") + '" style="--c:' + (r ? r.color : "#46505a") + '"></span>' + badge(r, v.routeCode) +
-      '<span class="main"><span class="t">' + esc(train ? (v.headsign || v.label) : v.label) + "</span>" +
+      '<span class="main"><span class="t">' + esc(train || v.scheduled ? (v.headsign || v.label) : v.label) + "</span>" +
       '<span class="s">' + esc(where) + "</span><span class=\"m\">" + meta + "</span></span>" +
       (train ? delayChip(v.delay) : occ ? '<span class="chip ' + occ[0] + '">' + occ[1] + "</span>" : "") + "</button>";
   }
@@ -624,7 +642,7 @@
         .sort((a, b) => (!!a.scheduled - !!b.scheduled) || codeOf(a).localeCompare(codeOf(b), undefined, { numeric: true }) ||
           String(a.headsign || a.label).localeCompare(String(b.headsign || b.label)));
       const live = all.filter(v => !v.scheduled).length;
-      const head = '<div class="grp">' + (sys.mode === "train" ? "🚆 Trains" : "🚌 Buses") + '<span>' + (sys.mode === "train" ? live + " live GPS · " + (all.length - live) + " timetable" : all.length + " live") + "</span></div>";
+      const head = '<div class="grp">' + (sys.mode === "train" ? "🚆 Trains" : "🚌 Buses") + '<span>' + live + " live GPS" + (all.length - live ? " · " + (all.length - live) + " scheduled" : "") + "</span></div>";
       if (list.length) return head + list.map(vehicleRow).join("");
       return head + '<div class="empty">' + emptyVehicles(sys, all.length) + "</div>";
     }).join("");
@@ -850,16 +868,18 @@
   setInterval(() => { if (!document.hidden) S.systems.forEach(s => s.schedule && updateEstimates(s)); }, CFG.refreshMs.estimates);
 
   /* status line */
-  setInterval(() => {
+  setInterval(updateStatus, 1000);
+  function updateStatus() {
     const s = $("#status");
-    const parts = visibleSystems().map(sys => plural([...S.all.values()].filter(v => v.sys === sys).length, sys));
+    const parts = visibleSystems().map(sys => { const n = [...S.all.values()].filter(v => v.sys === sys).length, l = liveCount(sys);
+      return l === n ? plural(n, sys) : plural(l, sys).replace(/^(\d+) /, "$1 live ") + " + " + (n - l) + " ⏱ scheduled"; });
     const busErr = BUS && shown(BUS) && BUS.feeds.vehicles && BUS.feeds.vehicles.status === "err";
     const lastOk = Math.max(0, ...S.systems.map(x => x.lastOk));
     if (!lastOk && !S.all.size) { s.textContent = busErr ? "Live feed unavailable" : "Connecting…"; s.className = "status" + (busErr ? " err" : ""); return; }
     const age = lastOk ? nowS() - lastOk : null;
     s.className = "status " + (busErr ? "err" : age != null && age > 60 ? "warn" : "live");
     s.innerHTML = (busErr ? "Reconnecting · " : '<i class="pulse"></i>Live · ') + parts.join(" · ") + (age != null ? " · " + C.ago(age) : "");
-  }, 1000);
+  }
   setInterval(() => { refreshOpenPopup(); if (S.tab === "vehicles") renderVehicles(); if (S.tab === "stops") renderStops(); }, 15000);
 
   /* ---------------- boot ---------------- */

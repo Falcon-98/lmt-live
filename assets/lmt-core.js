@@ -186,7 +186,9 @@ message TranslatedString { repeated Translation translation=1; message Translati
     const allStops = parseCsv(files.stops || "");
     let usedStops = null; const foreignStops = new Set();
     const stopTimes = files.stop_times ? parseCsv(files.stop_times) : [];
-    if (stopTimes.length) {
+    // Only a multi-agency feed needs stops narrowed to this agency's trips; a single-agency feed keeps
+    // every stop (LMT's timetable doesn't cover every route, e.g. CM06).
+    if (stopTimes.length && multiAgency) {
       const mine = new Set();
       stopTimes.forEach(st => {
         if (trips[st.trip_id]) mine.add(st.stop_id); else if (foreignTrips.has(st.trip_id)) foreignStops.add(st.stop_id);
@@ -371,7 +373,8 @@ message TranslatedString { repeated Translation translation=1; message Translati
 
   /**
    * Trains (or any scheduled vehicles) that should be on the line right now according to the timetable.
-   * opts: {now, tz, delays: Map tripId→sec, cancelled: Set tripIds, skip: Set tripIds (have live GPS)}
+   * opts: {now, tz, delays: Map tripId→sec, cancelled: Set tripIds, skip: Set tripIds (have live GPS),
+   *        skipRoutes: Set routeIds (a route with live GPS shows only its real vehicles)}
    */
   function scheduledVehicles(st, opts) {
     const sched = st && st.schedule; if (!sched) return [];
@@ -381,6 +384,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
     const out = [];
     for (const trip of sched.trips) {
       if (opts.skip && opts.skip.has(trip.id)) continue;
+      if (opts.skipRoutes && opts.skipRoutes.has(trip.route)) continue;
       if (opts.cancelled && opts.cancelled.has(trip.id)) continue;
       const delay = opts.delays && opts.delays.has(trip.id) ? opts.delays.get(trip.id) : null;
       for (const d of days) {
@@ -560,9 +564,12 @@ message TranslatedString { repeated Translation translation=1; message Translati
     opts = opts || {};
     const now = opts.now || Date.now() / 1000;
     const hasRoutes = idx.byId.size > 0;
-    const byStop = new Map(), byVehicle = new Map(), delays = new Map(), cancelledTrips = new Set(); let count = 0;
+    const byStop = new Map(), byVehicle = new Map(), delays = new Map(), cancelledTrips = new Set(); let count = 0, stale = 0;
     for (const e of (feed && feed.entity) || []) {
       const tu = e && e.trip_update; if (!tu || e.is_deleted) continue;
+      // The producer keeps months-old updates in the feed; an old prediction is worse than none.
+      const tuTs = toSeconds(tu.timestamp);
+      if (tuTs && now - tuTs > (opts.maxAgeSec || 2 * 3600)) { stale++; continue; }
       const trip = tu.trip || {};
       const route = resolveRoute(idx, trip.route_id, trip.trip_id);
       if (!route && hasRoutes && !looksLikeAgency(trip, opts.agency)) continue;
@@ -597,7 +604,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
     }
     byStop.forEach(a => a.sort((x, y) => x.time - y.time));
     byVehicle.forEach(a => a.sort((x, y) => x.time - y.time));
-    return { byStop, byVehicle, delays, cancelled: cancelledTrips, count, headerTs: toSeconds(feed && feed.header && feed.header.timestamp) };
+    return { byStop, byVehicle, delays, cancelled: cancelledTrips, count, stale, headerTs: toSeconds(feed && feed.header && feed.header.timestamp) };
   }
 
   /* ---------------- realtime: alerts ---------------- */

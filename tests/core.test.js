@@ -175,3 +175,17 @@ test("SLR trip updates: trip-level delays collected", () => {
   const tu = C.processTripUpdates(decode(F.slrTripUpdatesFeed(NOW)), slrIdx, { now: NOW, agency: "SLR" });
   assert.equal(tu.delays.get("TR_2"), 360);
 });
+
+test("trip updates: months-old updates are ignored", () => {
+  const buf = F.FeedMessage.encode(F.FeedMessage.fromObject({ header: { gtfs_realtime_version: "2.0", timestamp: NOW }, entity: [
+    { id: "old", trip_update: { trip: { trip_id: "TR_2" }, timestamp: NOW - 90 * 86400, stop_time_update: [{ arrival: { delay: 223 } }] } }] })).finish();
+  const tu = C.processTripUpdates(decode(buf), slrIdx, { now: NOW, agency: "SLR" });
+  assert.equal(tu.count, 0); assert.equal(tu.stale, 1); assert.ok(!tu.delays.has("TR_2"));
+});
+
+test("single-agency feed with a partial timetable keeps all its stops", () => {
+  const f = Object.assign({}, F.files, { trips: "trip_id,route_id,service_id\nT1," + F.CM01 + ",D\n", stop_times: "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,06:00:00,06:00:00,101,1\nT1,06:05:00,06:05:00,102,2\n" });
+  const s = C.buildStatic(f, { agency: "LMT", schedule: true });
+  assert.equal(C.indexStatic(s).platforms.length, 9);
+  assert.equal(s.schedule.trips.length, 1);
+});

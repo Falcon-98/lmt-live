@@ -1,0 +1,24 @@
+name: live-smoke
+# Opens the app in Chromium against the real LMT/SLR feeds and reports what a visitor would see.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+  push:
+    paths: ["index.html", "assets/**", "tools/live-smoke.mjs", ".github/workflows/live-smoke.yml"]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx -y playwright@1.56.1 install --with-deps chromium
+      - run: node tools/live-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-screenshots
+          path: tests/screenshots/live-*.png

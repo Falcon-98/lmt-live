@@ -55,6 +55,14 @@ function summarizeVehicles(feed, label) {
         console.log("  files: " + Object.keys(zip.files).map(n => n + ":" + zip.files[n]._data.uncompressedSize).join(" "));
         for (const n of ["agency", "routes", "stops", "trips", "shapes", "stop_times", "calendar", "calendar_dates", "feed_info"]) { const f = zip.file(n + ".txt"); files[n] = f ? await f.async("string") : ""; }
         console.log("  routes.txt:\n" + files.routes.split("\n").slice(0, 12).map(l => "    " + l).join("\n"));
+        for (const n of ["trips", "stop_times", "calendar", "calendar_dates", "feed_info", "agency"]) if (files[n]) console.log("  " + n + ".txt (" + files[n].split("\n").length + " lines):\n" + files[n].split("\n").slice(0, a === "LMT" ? 8 : 3).map(l => "    " + l).join("\n"));
+        if (a === "LMT" && files.stop_times) {
+          const rows = C.parseCsv(files.stop_times); const byTrip = {}; rows.forEach(r => (byTrip[r.trip_id] = byTrip[r.trip_id] || []).push(r));
+          const tr = C.parseCsv(files.trips); const perRoute = {}; tr.forEach(t => { perRoute[t.route_id] = (perRoute[t.route_id] || 0) + 1; });
+          console.log("  LMT trips per route: " + JSON.stringify(perRoute));
+          Object.keys(byTrip).slice(0, 3).forEach(id => { const r = byTrip[id]; console.log("  trip " + id + ": " + r.length + " stops " + r[0].departure_time + " → " + r[r.length - 1].arrival_time); });
+          const firsts = Object.values(byTrip).map(r => r[0].departure_time).sort(); console.log("  first departures range: " + firsts[0] + " … " + firsts[firsts.length - 1]);
+        }
         console.log("  stops.txt head:\n" + files.stops.split("\n").slice(0, 4).map(l => "    " + l).join("\n"));
         const st = C.buildStatic(files, { agency: a, schedule: a === "SLR" });
         idx[a] = C.indexStatic(st);
@@ -87,6 +95,12 @@ function summarizeVehicles(feed, label) {
   for (const a of ["LMT", "SLR"]) for (const k of ["trip-updates", "alerts"]) {
     const v = await get("/realtime/" + k + "?agency=" + a);
     if (v && v.r.ok) { try { const f = decode(v.buf); console.log(`  header=${JSON.stringify(f.header)} entities=${(f.entity || []).length} sample=${JSON.stringify((f.entity || [])[0] || null).slice(0, 700)}`); } catch (e) { console.log("  decode error " + e.message); } }
+  }
+  { const v = await get("/realtime/trip-updates?agency=LMT"); if (v && v.r.ok) { const f = decode(v.buf); const ts = (f.entity || []).map(e => e.trip_update && C.toSeconds(e.trip_update.timestamp)).filter(Boolean);
+    console.log("  trip-update ages (h): " + ts.map(t => Math.round((now - t) / 360) / 10).join(",") + " trip ids: " + (f.entity || []).map(e => e.trip_update && e.trip_update.trip && e.trip_update.trip.trip_id).join(",")); } }
+  // Is there any public (unauthenticated) live source on LMT's own site? Status/CORS only.
+  for (const u of ["https://lankametro.lk/en/smartmetro", "https://lankametro.lk/metrobus-proxy/ticketing-service/api/v1/buses", "https://lankametro.lk/metrobus-proxy/fare-service/api/v1/routes"]) {
+    const x = await get(u); if (x) console.log("  body head: " + x.buf.toString().slice(0, 300).replace(/\s+/g, " "));
   }
   await get("https://files.mobilitydatabase.org/mdb-3490/latest.zip");
   await get("https://lmt-transit-bridge-production.up.railway.app/health");

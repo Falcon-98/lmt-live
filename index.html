@@ -79,7 +79,7 @@
   </div>
   <footer class="footer">
     <details><summary>Feed status</summary><ul id="feed-details" class="feeds"></ul></details>
-    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a> (CC-BY-4.0) and Sri Lanka Railways timetables via <a href="https://api.transit.seyone.dev" target="_blank" rel="noopener">transit.seyone.dev</a>. Unofficial — not affiliated with LMT or SLR. ⏱ marks vehicles placed from the timetable, not GPS.</div>
+    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a> (CC-BY-4.0) and Sri Lanka Railways timetables via <a href="https://api.transit.seyone.dev" target="_blank" rel="noopener">transit.seyone.dev</a>. Station positions corrected with <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> data (ODbL). Unofficial — not affiliated with LMT or SLR. ⏱ marks vehicles placed from the timetable, not GPS.</div>
   </footer>
 </section>
 
@@ -91,6 +91,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.2.6/protobuf.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="assets/lmt-core.js"></script>
+<script src="assets/station-fixes.js"></script>
 <script>
   /* Optional overrides, e.g. a CORS proxy:
      window.LMT_CONFIG = { fallbackApi: "https://lmt-proxy.example.workers.dev/api/v1" }; */

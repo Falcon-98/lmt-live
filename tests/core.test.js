@@ -208,3 +208,20 @@ test("running trip exposes a timeline and progress", () => {
   assert.ok(t1.timeline[0].passed && !t1.timeline[5].passed);
   assert.ok(t1.progress > 0 && t1.progress < 1);
 });
+
+test("station fixes replace published coordinates before anything uses them", () => {
+  const fixes = { ST_MORATUWA: [6.7745, 79.8826] };
+  const st = C.buildStatic(F.slrFiles(NOW), { agency: "SLR", schedule: true, stopFixes: fixes });
+  assert.deepEqual([st.stops.ST_MORATUWA.lat, st.stops.ST_MORATUWA.lon], [6.7745, 79.8826]);
+  assert.equal(st.stops.ST_MORATUWA.fixed, true);
+  assert.equal(st.stops.ST_PANADURA.fixed, false);
+});
+
+test("bundled SLR station fixes are well-formed and inside Sri Lanka", () => {
+  const FIX = require("../assets/station-fixes.js");
+  const ids = Object.keys(FIX);
+  assert.ok(ids.length >= 30, "has the OSM corrections");
+  ids.forEach(id => { assert.match(id, /^ST_/); assert.ok(C.inArea(FIX[id][0], FIX[id][1], C.SRI_LANKA), id); });
+  assert.ok(FIX.ST_SANKATHANAI && FIX.ST_ELIPHANT_PASS, "the two stations that shared one wrong coordinate are fixed");
+  assert.notDeepEqual(FIX.ST_SANKATHANAI, FIX.ST_ELIPHANT_PASS);
+});

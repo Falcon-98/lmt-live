@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LMT Live Transit</title>
+<meta name="description" content="Live view of Lanka Metro Transit CM buses — vehicle positions, routes, stops and service alerts from the open GTFS &amp; GTFS-Realtime feeds.">
+<meta name="theme-color" content="#121417">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossorigin="anonymous">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: full-bleed map with a floating control panel (docked right on desktop, a bottom sheet on phones). */
+:root{
+  --bg:#f3f4f1; --surface:#ffffff; --surface-2:#f7f8f5; --ink:#16191d; --muted:#5b6168;
+  --line:#dcdfd9; --board:#121417; --amber:#f2a51a; --btn:#1c3f5e; --btn-ink:#fff;
+  --good:#2e7d4f; --warn:#c77d1a; --bad:#c8102e; --shadow:0 6px 24px rgba(16,19,23,.16);
+  --display:"Barlow Condensed","Arial Narrow",sans-serif;
+  --body:"Atkinson Hyperlegible","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#101214; --surface:#181b1e; --surface-2:#1f2327; --ink:#eceeea; --muted:#a3a9ad;
+  --line:#2c3135; --board:#08090a; --amber:#f5b13a; --btn:#f5b13a; --btn-ink:#16191d;
+  --good:#5bbd84; --warn:#e0a44a; --bad:#ef6a7e; --shadow:0 6px 24px rgba(0,0,0,.5);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#101214; --surface:#181b1e; --surface-2:#1f2327; --ink:#eceeea; --muted:#a3a9ad;
+  --line:#2c3135; --board:#08090a; --amber:#f5b13a; --btn:#f5b13a; --btn-ink:#16191d;
+  --good:#5bbd84; --warn:#e0a44a; --bad:#ef6a7e; --shadow:0 6px 24px rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:var(--body);color:var(--ink);background:var(--bg);overflow:hidden}
+#map{position:absolute;inset:0;background:var(--surface-2)}
+.leaflet-container{font-family:var(--body);background:var(--surface-2)}
+
+/* Top bar */
+.topbar{position:absolute;top:0;left:0;right:0;z-index:1000;display:flex;align-items:center;gap:10px;
+  padding:10px 14px;padding-top:calc(10px + env(safe-area-inset-top,0px));
+  background:var(--board);color:var(--amber);box-shadow:var(--shadow)}
+.topbar h1{font-family:var(--display);font-weight:700;font-size:1.3rem;letter-spacing:.02em;margin:0;line-height:1;white-space:nowrap}
+.topbar .sub{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:#d8d2c4;opacity:.85}
+.health{display:flex;gap:10px;margin-left:auto;align-items:center}
+.dot{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:#cdd1cc}
+.dot b{width:9px;height:9px;border-radius:50%;background:var(--muted);display:inline-block}
+.dot.ok b{background:var(--good)} .dot.warn b{background:var(--warn)} .dot.err b{background:var(--bad)}
+.theme-btn{background:transparent;border:1px solid rgba(242,165,26,.5);color:var(--amber);border-radius:6px;
+  width:34px;height:34px;cursor:pointer;font-size:1rem;display:grid;place-items:center}
+
+/* Banner */
+.banner{position:absolute;left:50%;transform:translateX(-50%);top:calc(60px + env(safe-area-inset-top,0px));z-index:1000;
+  max-width:min(92vw,560px);background:var(--surface);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--warn);
+  border-radius:8px;box-shadow:var(--shadow);padding:11px 14px;font-size:.9rem;display:none}
+.banner.show{display:block}
+.banner b{font-family:var(--display);font-size:1.05rem}
+.banner code{font-family:var(--mono);font-size:.8rem;background:var(--surface-2);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+
+/* Panel */
+.panel{position:absolute;z-index:1000;background:var(--surface);box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden}
+@media (min-width:721px){.panel{top:64px;right:12px;bottom:12px;width:340px;border:1px solid var(--line);border-radius:12px}}
+@media (max-width:720px){.panel{left:0;right:0;bottom:0;max-height:52vh;border-top:1px solid var(--line);border-radius:14px 14px 0 0;
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+  .panel .grab{height:4px;width:40px;background:var(--line);border-radius:2px;margin:8px auto 2px}}
+.grab{display:none}
+.tabs{display:flex;border-bottom:1px solid var(--line);flex:0 0 auto}
+.tabs button{flex:1;font:inherit;font-size:.82rem;font-weight:700;border:0;background:transparent;color:var(--muted);
+  padding:12px 6px;cursor:pointer;border-bottom:2px solid transparent}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--amber)}
+.tabs .count{font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:4px}
+.tabpanes{overflow-y:auto;flex:1 1 auto;-webkit-overflow-scrolling:touch}
+.pane{display:none;padding:8px} .pane.show{display:block}
+.empty{color:var(--muted);text-align:center;padding:26px 16px;font-size:.9rem}
+
+.row{display:flex;gap:10px;align-items:center;padding:9px 8px;border-radius:8px}
+.row+.row{border-top:1px solid var(--line)}
+.row:hover{background:var(--surface-2);cursor:pointer}
+.badge{font-family:var(--display);font-weight:700;font-size:.95rem;color:#fff;border-radius:6px;padding:3px 8px;min-width:46px;text-align:center;letter-spacing:.02em;flex:0 0 auto}
+.row .main{min-width:0;flex:1}
+.row .main .t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .main .s{font-size:.8rem;color:var(--muted);font-family:var(--mono)}
+.chip{font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.05em;padding:2px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);flex:0 0 auto}
+.chip.occ{border-color:transparent;color:#fff}
+.sw{width:14px;height:14px;border-radius:4px;flex:0 0 auto}
+.toggle{margin-left:auto;position:relative;width:38px;height:22px;flex:0 0 auto}
+.toggle input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.toggle span{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:.15s}
+.toggle span::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.toggle input:checked+span{background:var(--good)} .toggle input:checked+span::after{transform:translateX(16px)}
+
+.alert{padding:11px 10px;border-radius:8px;background:var(--surface-2);margin-bottom:8px;border-left:3px solid var(--warn)}
+.alert .hd{font-weight:700;margin-bottom:3px}
+.alert .meta{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
+.alert .ds{font-size:.88rem;color:var(--ink)}
+
+.footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 10px;font-size:.72rem;color:var(--muted);line-height:1.4}
+.footer a{color:var(--muted)}
+.updated{font-family:var(--mono);font-size:.7rem;color:var(--muted)}
+
+/* Bus marker */
+.bus{display:grid;place-items:center;width:30px;height:30px;border-radius:50% 50% 50% 2px;transform:rotate(45deg);
+  box-shadow:0 2px 6px rgba(0,0,0,.4);border:2px solid rgba(255,255,255,.9);color:#fff;font-family:var(--display);font-weight:700;font-size:.72rem}
+.bus span{transform:rotate(-45deg);line-height:1}
+.bus .arrow{position:absolute;top:-9px;left:50%;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid currentColor;transform:translateX(-50%)}
+.stop-dot{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid var(--board);box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.pop b{font-family:var(--display);font-size:1.05rem}
+.pop .kv{font-size:.84rem;margin-top:3px} .pop .kv span{color:var(--muted)}
+.pop .rb{display:inline-block;color:#fff;border-radius:5px;padding:2px 7px;font-family:var(--display);font-weight:700;margin-bottom:4px}
+
+.loader{position:absolute;inset:0;z-index:1500;display:grid;place-items:center;background:var(--bg);transition:opacity .4s}
+.loader.hide{opacity:0;pointer-events:none}
+.loader .box{text-align:center}
+.loader .m{font-family:var(--display);font-weight:700;font-size:2rem;color:var(--amber);letter-spacing:.02em}
+.loader .msg{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin-top:8px;letter-spacing:.06em}
+.spin{width:30px;height:30px;border:3px solid var(--line);border-top-color:var(--amber);border-radius:50%;margin:14px auto 0;animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}* {transition:none!important}}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--surface);color:var(--ink)}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="topbar">
+  <div>
+    <h1>LMT&nbsp;LIVE</h1>
+    <div class="sub">Lanka Metro Transit</div>
+  </div>
+  <div class="health">
+    <span class="dot" id="h-static" title="Static GTFS schedule"><b></b>GTFS</span>
+    <span class="dot" id="h-vehicles" title="Live vehicle positions"><b></b>Buses</span>
+    <span class="dot" id="h-alerts" title="Service alerts"><b></b>Alerts</span>
+    <button class="theme-btn" id="theme" title="Toggle dark / light" aria-label="Toggle theme">◐</button>
+  </div>
+</div>
+
+<div class="banner" id="banner" role="status"></div>
+
+<section class="panel" aria-label="Transit data">
+  <div class="grab" aria-hidden="true"></div>
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-pane="vehicles">Buses<span class="count" id="c-vehicles">0</span></button>
+    <button role="tab" aria-selected="false" data-pane="routes">Routes<span class="count" id="c-routes">0</span></button>
+    <button role="tab" aria-selected="false" data-pane="stops">Stops<span class="count" id="c-stops">0</span></button>
+    <button role="tab" aria-selected="false" data-pane="alerts">Alerts<span class="count" id="c-alerts">0</span></button>
+  </div>
+  <div class="tabpanes">
+    <div class="pane show" id="pane-vehicles" role="tabpanel"><div class="empty">Waiting for live buses…</div></div>
+    <div class="pane" id="pane-routes" role="tabpanel"><div class="empty">Loading routes…</div></div>
+    <div class="pane" id="pane-stops" role="tabpanel"><div class="empty">Loading stops…</div></div>
+    <div class="pane" id="pane-alerts" role="tabpanel"><div class="empty">No active service alerts.</div></div>
+  </div>
+  <div class="footer">
+    <div class="updated" id="updated">Starting…</div>
+    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a>, licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>. Unofficial. Map © OpenStreetMap contributors.</div>
+  </div>
+</section>
+
+<div class="loader" id="loader"><div class="box"><div class="m">LMT LIVE</div><div class="spin"></div><div class="msg" id="loader-msg">Loading route data…</div></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.2.6/protobuf.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" crossorigin="anonymous"></script>
+<script>
+/* ============================================================
+   LMT Live Transit — single-file viewer for the open LMT feeds
+   Static GTFS + GTFS-Realtime (vehicle positions, trip updates, alerts)
+   ============================================================ */
+"use strict";
+const API = "https://api.transit.seyone.dev/api/v1";
+const FEEDS = {
+  staticGtfs: API + "/gtfs/download?agency=LMT",
+  // Fallback static snapshot (MobilityDatabase cache) if the producer URL is unreachable:
+  staticSnapshot: "https://files.mobilitydatabase.org/mdb-3490/mdb-3490-202610110023/mdb-3490-202610110023.zip",
+  vehicles: API + "/realtime/vehicle-positions",
+  tripUpdates: API + "/realtime/trip-updates",
+  alerts: API + "/realtime/alerts"
+};
+const REFRESH = { vehicles: 15000, alerts: 60000, tripUpdates: 30000 };
+
+const GTFS_RT_PROTO = `
+syntax = "proto2"; package transit_realtime;
+message FeedMessage { required FeedHeader header=1; repeated FeedEntity entity=2; }
+message FeedHeader { required string gtfs_realtime_version=1; optional uint64 timestamp=3; }
+message FeedEntity { required string id=1; optional bool is_deleted=2; optional TripUpdate trip_update=3; optional VehiclePosition vehicle=4; optional Alert alert=5; }
+message TripUpdate { required TripDescriptor trip=1; optional VehicleDescriptor vehicle=3; repeated StopTimeUpdate stop_time_update=2; optional uint64 timestamp=4; optional int32 delay=5;
+  message StopTimeEvent { optional int32 delay=1; optional int64 time=2; optional int32 uncertainty=3; }
+  message StopTimeUpdate { optional uint32 stop_sequence=1; optional string stop_id=4; optional StopTimeEvent arrival=2; optional StopTimeEvent departure=3; optional ScheduleRelationship schedule_relationship=5;
+    enum ScheduleRelationship { SCHEDULED=0; SKIPPED=1; NO_DATA=2; } } }
+message VehiclePosition { optional TripDescriptor trip=1; optional VehicleDescriptor vehicle=8; optional Position position=2; optional uint32 current_stop_sequence=3; optional string stop_id=7; optional VehicleStopStatus current_status=4; optional uint64 timestamp=5; optional CongestionLevel congestion_level=6; optional OccupancyStatus occupancy_status=9;
+  enum VehicleStopStatus { INCOMING_AT=0; STOPPED_AT=1; IN_TRANSIT_TO=2; }
+  enum CongestionLevel { UNKNOWN_CONGESTION_LEVEL=0; RUNNING_SMOOTHLY=1; STOP_AND_GO=2; CONGESTION=3; SEVERE_CONGESTION=4; }
+  enum OccupancyStatus { EMPTY=0; MANY_SEATS_AVAILABLE=1; FEW_SEATS_AVAILABLE=2; STANDING_ROOM_ONLY=3; CRUSHED_STANDING_ROOM_ONLY=4; FULL=5; NOT_ACCEPTING_PASSENGERS=6; } }
+message Position { required float latitude=1; required float longitude=2; optional float bearing=3; optional double odometer=4; optional float speed=5; }
+message TripDescriptor { optional string trip_id=1; optional string route_id=5; optional uint32 direction_id=6; optional string start_time=2; optional string start_date=3; optional ScheduleRelationship schedule_relationship=4;
+  enum ScheduleRelationship { SCHEDULED=0; ADDED=1; UNSCHEDULED=2; CANCELED=3; } }
+message VehicleDescriptor { optional string id=1; optional string label=2; optional string license_plate=3; }
+message Alert { repeated TimeRange active_period=1; repeated EntitySelector informed_entity=5; optional Cause cause=6; optional Effect effect=7; optional TranslatedString url=8; optional TranslatedString header_text=10; optional TranslatedString description_text=11;
+  enum Cause { UNKNOWN_CAUSE=1; OTHER_CAUSE=2; TECHNICAL_PROBLEM=3; STRIKE=4; DEMONSTRATION=5; ACCIDENT=6; HOLIDAY=7; WEATHER=8; MAINTENANCE=9; CONSTRUCTION=10; POLICE_ACTIVITY=11; MEDICAL_EMERGENCY=12; }
+  enum Effect { NO_SERVICE=1; REDUCED_SERVICE=2; SIGNIFICANT_DELAYS=3; DETOUR=4; ADDITIONAL_SERVICE=5; MODIFIED_SERVICE=6; OTHER_EFFECT=7; UNKNOWN_EFFECT=8; STOP_MOVED=9; } }
+message TimeRange { optional uint64 start=1; optional uint64 end=2; }
+message EntitySelector { optional string agency_id=1; optional string route_id=2; optional int32 route_type=3; optional TripDescriptor trip=4; optional string stop_id=5; }
+message TranslatedString { repeated Translation translation=1; message Translation { required string text=1; optional string language=2; } }
+`;
+
+/* ---------- state ---------- */
+const state = {
+  routes:new Map(), stops:new Map(), trips:new Map(),
+  routeVisible:new Map(), routeLayers:new Map(),
+  vehicles:new Map(), vehicleMarkers:new Map(),
+  stopMarkers:new Map(), alerts:[], tripUpdates:new Map(),
+  FeedMessage:null, sample:false
+};
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const OCC = {EMPTY:["#2e7d4f","Empty"],MANY_SEATS_AVAILABLE:["#2e7d4f","Many seats"],FEW_SEATS_AVAILABLE:["#c77d1a","Few seats"],
+  STANDING_ROOM_ONLY:["#c8102e","Standing only"],CRUSHED_STANDING_ROOM_ONLY:["#c8102e","Crush load"],FULL:["#c8102e","Full"],NOT_ACCEPTING_PASSENGERS:["#6b6f74","Not boarding"]};
+const STATUS = {INCOMING_AT:"Arriving",STOPPED_AT:"At stop",IN_TRANSIT_TO:"In transit"};
+
+/* ---------- map ---------- */
+const map = L.map("map",{zoomControl:true,attributionControl:false}).setView([6.9147,79.9733],11);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);
+const routePane = map.createPane("routes"); routePane.style.zIndex=410;
+const stopPane = map.createPane("stops"); stopPane.style.zIndex=420;
+
+/* ---------- health + banner ---------- */
+function health(id,cls){const el=$("#h-"+id);el.className="dot "+cls;}
+function banner(html){const b=$("#banner");b.innerHTML=html;b.classList.add("show");}
+function hideBanner(){$("#banner").classList.remove("show");}
+function stamp(){$("#updated").textContent=(state.sample?"SAMPLE DATA · ":"")+"Updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});}
+
+/* ---------- fetch helper (handles CORS/offline) ---------- */
+async function getBuffer(url){
+  const r = await fetch(url,{mode:"cors",cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return await r.arrayBuffer();
+}
+
+/* ---------- static GTFS ---------- */
+function readRows(text){return Papa.parse(text.trim(),{header:true,skipEmptyLines:true}).data;}
+async function loadStatic(){
+  $("#loader-msg").textContent="Loading route & stop data…";
+  let buf;
+  try { buf = await getBuffer(FEEDS.staticGtfs); }
+  catch(e){ try { buf = await getBuffer(FEEDS.staticSnapshot); } catch(e2){ throw e; } }
+  const zip = await JSZip.loadAsync(buf);
+  const grab = async n => { const f=zip.file(n); return f ? await f.async("string") : ""; };
+  const routes = readRows(await grab("routes.txt"));
+  const stops  = readRows(await grab("stops.txt"));
+  const trips  = readRows(await grab("trips.txt"));
+  const shapesTxt = await grab("shapes.txt");
+
+  routes.forEach(r=>{
+    const color = (r.route_color && /^[0-9a-f]{6}$/i.test(r.route_color)) ? "#"+r.route_color : pick(r.route_id);
+    state.routes.set(r.route_id,{id:r.route_id,name:r.route_short_name||r.route_long_name||r.route_id,
+      long:r.route_long_name||"",color,shape:(r.route_text_color||"")});
+    state.routeVisible.set(r.route_id,true);
+  });
+  stops.forEach(s=>{ if(s.stop_lat&&s.stop_lon) state.stops.set(s.stop_id,{id:s.stop_id,code:s.stop_code||"",name:s.stop_name||s.stop_id,lat:+s.stop_lat,lon:+s.stop_lon}); });
+  trips.forEach(t=> state.trips.set(t.trip_id,{route:t.route_id,shape:t.shape_id,head:t.trip_headsign||""}));
+
+  // shapes -> polylines per route (pick first shape per route)
+  if(shapesTxt){
+    const pts=new Map();
+    readRows(shapesTxt).forEach(p=>{ if(!pts.has(p.shape_id))pts.set(p.shape_id,[]); pts.get(p.shape_id).push([+p.shape_pt_sequence,+p.shape_pt_lat,+p.shape_pt_lon]); });
+    const routeShape=new Map();
+    state.trips.forEach(t=>{ if(t.shape&&!routeShape.has(t.route))routeShape.set(t.route,t.shape); });
+    routeShape.forEach((shapeId,routeId)=>{
+      const arr=pts.get(shapeId); if(!arr)return; arr.sort((a,b)=>a[0]-b[0]);
+      const line=L.polyline(arr.map(p=>[p[1],p[2]]),{pane:"routes",color:(state.routes.get(routeId)||{}).color||"#888",weight:4,opacity:.85});
+      state.routeLayers.set(routeId,line); line.addTo(map);
+    });
+  }
+  drawStops(); renderRoutes(); renderStops();
+  $("#c-routes").textContent=state.routes.size; $("#c-stops").textContent=state.stops.size;
+  const all=[...state.stops.values()]; if(all.length){ map.fitBounds(L.latLngBounds(all.map(s=>[s.lat,s.lon])).pad(.1)); }
+}
+function pick(key){ // stable fallback colour from id
+  const pal=["#c8102e","#0072ce","#009a44","#f2a51a","#6a4c93","#e0529c","#00a3a3","#7a5230"];
+  let h=0; for(const c of String(key))h=(h*31+c.charCodeAt(0))>>>0; return pal[h%pal.length];
+}
+function drawStops(){
+  state.stopMarkers.forEach(m=>map.removeLayer(m)); state.stopMarkers.clear();
+  state.stops.forEach(s=>{
+    const m=L.marker([s.lat,s.lon],{pane:"stops",icon:L.divIcon({className:"",html:'<div class="stop-dot"></div>',iconSize:[12,12],iconAnchor:[6,6]})});
+    m.bindPopup(stopPopup(s)); state.stopMarkers.set(s.id,m);
+    if(map.getZoom()>=13) m.addTo(map);
+  });
+}
+map.on("zoomend",()=>{ const show=map.getZoom()>=13; state.stopMarkers.forEach(m=>{ const on=map.hasLayer(m); if(show&&!on)m.addTo(map); else if(!show&&on)map.removeLayer(m); }); });
+
+function stopPopup(s){
+  const ups=state.tripUpdates.get(s.id)||[];
+  let arr="";
+  if(ups.length){ arr='<div class="kv">'+ups.slice(0,3).map(u=>{
+      const r=state.routes.get(u.route); const nm=r?r.name:(u.route||"?");
+      const mins=u.time?Math.max(0,Math.round((u.time*1000-Date.now())/60000)):null;
+      return '<span style="color:'+(r?r.color:'#888')+';font-weight:700">'+esc(nm)+'</span> '+(mins==null?"—":mins+" min");
+    }).join("<br>")+'</div>'; }
+  return '<div class="pop"><b>'+esc(s.name)+'</b>'+(s.code?' <span style="color:var(--muted)">#'+esc(s.code)+'</span>':'')+arr+'</div>';
+}
+
+/* ---------- realtime decode ---------- */
+function decodeFeed(buf){ return state.FeedMessage.toObject(state.FeedMessage.decode(new Uint8Array(buf)),{enums:String,longs:Number,defaults:false}); }
+
+async function loadVehicles(){
+  try{
+    const feed = state.sample ? sampleVehicles() : decodeFeed(await getBuffer(FEEDS.vehicles));
+    const seen=new Set();
+    (feed.entity||[]).forEach(e=>{
+      if(!e.vehicle||!e.vehicle.position)return;
+      const v=e.vehicle, id=(v.vehicle&&v.vehicle.id)||e.id;
+      const routeId=(v.trip&&v.trip.route_id)|| (v.trip&&v.trip.trip_id&&state.trips.get(v.trip.trip_id)||{}).route ||"";
+      seen.add(id);
+      const rec={id,route:routeId,lat:v.position.latitude,lon:v.position.longitude,bearing:v.position.bearing||0,
+        speed:v.position.speed,status:v.current_status,occ:v.occupancy_status,label:(v.vehicle&&v.vehicle.label)||"",
+        ts:v.timestamp||(feed.header&&feed.header.timestamp)};
+      state.vehicles.set(id,rec); upsertBus(rec);
+    });
+    [...state.vehicleMarkers.keys()].forEach(id=>{ if(!seen.has(id)){ map.removeLayer(state.vehicleMarkers.get(id)); state.vehicleMarkers.delete(id); state.vehicles.delete(id); } });
+    health("vehicles", seen.size?"ok":"warn");
+    $("#c-vehicles").textContent=seen.size; renderVehicles(); stamp();
+  }catch(e){ health("vehicles","err"); onFeedError(e); }
+}
+function upsertBus(r){
+  if(!state.routeVisible.get(r.route) && state.routes.has(r.route)){ if(state.vehicleMarkers.has(r.id)){map.removeLayer(state.vehicleMarkers.get(r.id));state.vehicleMarkers.delete(r.id);} return; }
+  const color=(state.routes.get(r.route)||{}).color||"#1c3f5e";
+  const rt=state.routes.get(r.route); const lbl=rt?rt.name:(r.route||"•");
+  const html='<div class="bus" style="background:'+color+'"><div class="arrow" style="color:'+color+';transform:translateX(-50%) rotate('+(r.bearing||0)+'deg);transform-origin:50% 19px"></div><span>'+esc(lbl)+'</span></div>';
+  const icon=L.divIcon({className:"",html,iconSize:[30,30],iconAnchor:[15,15],popupAnchor:[0,-16]});
+  let m=state.vehicleMarkers.get(r.id);
+  if(m){ m.setLatLng([r.lat,r.lon]); m.setIcon(icon); } else { m=L.marker([r.lat,r.lon],{icon}).addTo(map); state.vehicleMarkers.set(r.id,m); }
+  m.bindPopup(busPopup(r));
+}
+function busPopup(r){
+  const rt=state.routes.get(r.route); const color=rt?rt.color:"#1c3f5e";
+  const occ=r.occ&&OCC[r.occ];
+  return '<div class="pop"><span class="rb" style="background:'+color+'">'+esc(rt?rt.name:(r.route||"Route ?"))+'</span>'+
+    '<div class="kv"><span>Bus</span> '+esc(r.id)+(r.label?' ('+esc(r.label)+')':'')+'</div>'+
+    (r.status?'<div class="kv"><span>Status</span> '+esc(STATUS[r.status]||r.status)+'</div>':'')+
+    (r.speed!=null?'<div class="kv"><span>Speed</span> '+(r.speed*3.6).toFixed(0)+' km/h</div>':'')+
+    (occ?'<div class="kv"><span>Occupancy</span> '+occ[1]+'</div>':'')+
+    (r.ts?'<div class="kv"><span>Seen</span> '+new Date(r.ts*1000).toLocaleTimeString()+'</div>':'')+'</div>';
+}
+
+async function loadAlerts(){
+  try{
+    const feed = state.sample ? {entity:[]} : decodeFeed(await getBuffer(FEEDS.alerts));
+    state.alerts=(feed.entity||[]).filter(e=>e.alert).map(e=>e.alert);
+    health("alerts", "ok"); $("#c-alerts").textContent=state.alerts.length; renderAlerts();
+  }catch(e){ health("alerts","err"); }
+}
+async function loadTripUpdates(){
+  if(state.sample) return;
+  try{
+    const feed=decodeFeed(await getBuffer(FEEDS.tripUpdates)); const byStop=new Map();
+    (feed.entity||[]).forEach(e=>{ const tu=e.trip_update; if(!tu)return;
+      const route=(tu.trip&&tu.trip.route_id)||(tu.trip&&tu.trip.trip_id&&state.trips.get(tu.trip.trip_id)||{}).route;
+      (tu.stop_time_update||[]).forEach(su=>{ const t=(su.arrival&&su.arrival.time)||(su.departure&&su.departure.time); if(!su.stop_id)return;
+        if(!byStop.has(su.stop_id))byStop.set(su.stop_id,[]); byStop.get(su.stop_id).push({route,time:t}); }); });
+    byStop.forEach(a=>a.sort((x,y)=>(x.time||0)-(y.time||0))); state.tripUpdates=byStop;
+  }catch(e){/* non-fatal */}
+}
+
+/* ---------- render panels ---------- */
+function renderVehicles(){
+  const el=$("#pane-vehicles");
+  const list=[...state.vehicles.values()].sort((a,b)=>String(a.route).localeCompare(String(b.route)));
+  if(!list.length){ el.innerHTML='<div class="empty">No buses are reporting right now.</div>'; return; }
+  el.innerHTML=list.map(r=>{ const rt=state.routes.get(r.route)||{color:"#888",name:r.route||"?"}; const occ=r.occ&&OCC[r.occ];
+    return '<div class="row" data-bus="'+esc(r.id)+'"><span class="badge" style="background:'+rt.color+'">'+esc(rt.name)+'</span>'+
+      '<div class="main"><div class="t">Bus '+esc(r.id)+(r.label?' · '+esc(r.label):'')+'</div>'+
+      '<div class="s">'+(r.speed!=null?(r.speed*3.6).toFixed(0)+' km/h':'—')+(r.status?' · '+esc(STATUS[r.status]||r.status):'')+'</div></div>'+
+      (occ?'<span class="chip occ" style="background:'+occ[0]+'">'+occ[1]+'</span>':'')+'</div>';
+  }).join("");
+  el.querySelectorAll("[data-bus]").forEach(n=>n.onclick=()=>{ const m=state.vehicleMarkers.get(n.dataset.bus); if(m){map.setView(m.getLatLng(),15);m.openPopup();}});
+}
+function renderRoutes(){
+  const el=$("#pane-routes");
+  const list=[...state.routes.values()].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  if(!list.length){ el.innerHTML='<div class="empty">No routes found.</div>'; return; }
+  el.innerHTML=list.map(r=>'<div class="row"><span class="sw" style="background:'+r.color+'"></span>'+
+    '<div class="main"><div class="t">'+esc(r.name)+'</div>'+(r.long?'<div class="s" style="font-family:var(--body)">'+esc(r.long)+'</div>':'')+'</div>'+
+    '<label class="toggle"><input type="checkbox" data-route="'+esc(r.id)+'" '+(state.routeVisible.get(r.id)?"checked":"")+'><span></span></label></div>').join("");
+  el.querySelectorAll("[data-route]").forEach(n=>n.onchange=()=>{ const id=n.dataset.route,on=n.checked; state.routeVisible.set(id,on);
+    const line=state.routeLayers.get(id); if(line){ on?line.addTo(map):map.removeLayer(line); }
+    state.vehicles.forEach(v=>{ if(v.route===id) upsertBus(v); }); });
+}
+function renderStops(){
+  const el=$("#pane-stops");
+  const list=[...state.stops.values()].sort((a,b)=>a.name.localeCompare(b.name));
+  if(!list.length){ el.innerHTML='<div class="empty">No stops found.</div>'; return; }
+  el.innerHTML=list.map(s=>'<div class="row" data-stop="'+esc(s.id)+'"><span class="badge" style="background:var(--board);min-width:auto;padding:3px 7px">'+esc(s.code||"·")+'</span>'+
+    '<div class="main"><div class="t">'+esc(s.name)+'</div><div class="s">'+s.lat.toFixed(4)+', '+s.lon.toFixed(4)+'</div></div></div>').join("");
+  el.querySelectorAll("[data-stop]").forEach(n=>n.onclick=()=>{ const s=state.stops.get(n.dataset.stop); if(s){map.setView([s.lat,s.lon],16); const m=state.stopMarkers.get(s.id); if(m){m.addTo(map);m.setPopupContent(stopPopup(s));m.openPopup();}}});
+}
+function renderAlerts(){
+  const el=$("#pane-alerts");
+  if(!state.alerts.length){ el.innerHTML='<div class="empty">No active service alerts.</div>'; return; }
+  const tx=t=>t&&t.translation&&t.translation[0]?t.translation[0].text:"";
+  el.innerHTML=state.alerts.map(a=>{ const routes=(a.informed_entity||[]).map(e=>e.route_id).filter(Boolean);
+    return '<div class="alert"><div class="meta">'+esc((a.effect||"ALERT").replace(/_/g," "))+(routes.length?' · '+routes.map(esc).join(", "):'')+'</div>'+
+      '<div class="hd">'+esc(tx(a.header_text)||"Service notice")+'</div>'+
+      (tx(a.description_text)?'<div class="ds">'+esc(tx(a.description_text))+'</div>':'')+'</div>';
+  }).join("");
+}
+
+/* ---------- error / sample fallback ---------- */
+let warned=false;
+function onFeedError(e){
+  if(warned)return; warned=true; state.sample=true;
+  banner('<b>Live feed not reachable</b><br>The browser couldn\'t load the realtime feed — usually because the feed host doesn\'t send a cross-origin (CORS) header, or you\'re offline. '+
+    'Showing <b>sample buses</b> so you can see the app. On a normal domain this works if the feed allows CORS; otherwise route it through a small proxy. '+
+    'Feed: <code>'+esc(FEEDS.vehicles)+'</code>');
+  loadVehicles();
+}
+function sampleVehicles(){ // plausible demo buses around Colombo
+  const base=[["CM01",6.9271,79.8612,45,8],["CM01",6.8905,79.8780,220,11],["CM03",6.8411,79.9290,300,0],
+    ["CM02",6.9000,79.9200,120,9],["CM04",6.8650,79.8650,10,6],["CM08",6.8100,79.9700,260,12]];
+  const t=Date.now()/1000;
+  return {header:{timestamp:t},entity:base.map((b,i)=>({id:"sample-"+i,vehicle:{trip:{route_id:b[0]},vehicle:{id:"SIM-"+(100+i)},
+    position:{latitude:b[1]+Math.sin(t/20+i)*0.004,longitude:b[2]+Math.cos(t/20+i)*0.004,bearing:b[3],speed:b[4]},
+    current_status:b[4]===0?"STOPPED_AT":"IN_TRANSIT_TO",timestamp:t,occupancy_status:["MANY_SEATS_AVAILABLE","FEW_SEATS_AVAILABLE","STANDING_ROOM_ONLY"][i%3]}}))};
+}
+function sampleStatic(){ // minimal routes/stops so the app is usable even if the GTFS zip is blocked
+  [["CM01","#c8102e","Makumbura – Pettah"],["CM02","#0072ce","Millennium City – Fort"],["CM03","#009a44","Makumbura – Kadawatha"],
+   ["CM04","#f2a51a","Dematagoda – Panadura"],["CM05","#7a5230","Thalangama – Ekala"],["CM06","#e0529c","Kollupitiya – Bambalapitiya"],["CM08","#00a3a3","Kesbewa – Pettah"]]
+   .forEach(r=>{ state.routes.set(r[0],{id:r[0],name:r[0],long:r[2],color:r[1]}); state.routeVisible.set(r[0],true); });
+  renderRoutes(); $("#c-routes").textContent=state.routes.size;
+}
+
+/* ---------- tabs / theme ---------- */
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tabs button").forEach(x=>x.setAttribute("aria-selected",String(x===b)));
+  document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("show",p.id==="pane-"+b.dataset.pane));
+});
+(function themeInit(){ const btn=$("#theme"); let t=null; try{t=localStorage.getItem("lmt-theme");}catch(e){}
+  if(t)document.documentElement.setAttribute("data-theme",t);
+  btn.onclick=()=>{ const cur=document.documentElement.getAttribute("data-theme");
+    const dark=cur?cur==="dark":matchMedia("(prefers-color-scheme:dark)").matches; const next=dark?"light":"dark";
+    document.documentElement.setAttribute("data-theme",next); try{localStorage.setItem("lmt-theme",next);}catch(e){} };
+})();
+
+/* ---------- boot ---------- */
+async function boot(){
+  try{ state.FeedMessage=protobuf.parse(GTFS_RT_PROTO,{keepCase:true}).root.lookupType("transit_realtime.FeedMessage"); }
+  catch(e){ console.error("proto parse failed",e); }
+  try{ await loadStatic(); health("static","ok"); }
+  catch(e){ health("static","err"); state.sample=true; sampleStatic();
+    banner('<b>Couldn\'t load the GTFS schedule</b><br>Showing built-in route names and sample buses. The static feed ('+
+      '<code>'+esc(FEEDS.staticGtfs)+'</code>) may be blocking cross-origin downloads.'); }
+  $("#loader").classList.add("hide");
+  await loadTripUpdates(); await loadVehicles(); await loadAlerts();
+  setInterval(loadVehicles,REFRESH.vehicles);
+  setInterval(loadAlerts,REFRESH.alerts);
+  setInterval(loadTripUpdates,REFRESH.tripUpdates);
+  if(state.sample) setInterval(loadVehicles,2000); // animate sample
+}
+boot();
+</script>
+</body>
+</html>

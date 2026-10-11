@@ -1,0 +1,16 @@
+{
+  "name": "lmt-live",
+  "private": true,
+  "description": "Live map of Lanka Metro Transit buses from the open GTFS / GTFS-Realtime feeds. No build step; these scripts are for tests only.",
+  "scripts": {
+    "test": "node --test tests/core.test.js",
+    "test:e2e": "node tests/e2e.mjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "jszip": "3.10.1",
+    "leaflet": "^1.9.4",
+    "playwright-core": "1.56.1",
+    "protobufjs": "7.2.6"
+  }
+}

@@ -6,9 +6,13 @@ on:
     - cron: "17 */6 * * *"
   push:
     paths: ["index.html", "assets/**", "tools/live-smoke.mjs", ".github/workflows/live-smoke.yml"]
+concurrency:
+  group: live-smoke-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

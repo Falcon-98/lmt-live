@@ -196,11 +196,14 @@ message TranslatedString { repeated Translation translation=1; message Translati
       if (mine.size) usedStops = mine;
     }
     const stopsById = {};
+    const stopFixes = opts.stopFixes || {};
     allStops.forEach(s => {
-      const lat = num(s.stop_lat), lon = num(s.stop_lon);
+      // Known-bad coordinates in the published feed are replaced (see assets/station-fixes.js).
+      const fix = stopFixes[s.stop_id];
+      const lat = fix ? fix[0] : num(s.stop_lat), lon = fix ? fix[1] : num(s.stop_lon);
       if (lat == null || lon == null || !s.stop_id) return;
       stopsById[s.stop_id] = { id: s.stop_id, code: s.stop_code || "", name: s.stop_name || s.stop_id, lat, lon,
-        type: num(s.location_type) || 0, parent: s.parent_station || "", desc: s.stop_desc || "" };
+        type: num(s.location_type) || 0, parent: s.parent_station || "", desc: s.stop_desc || "", fixed: !!fix };
     });
     let keep = Object.values(stopsById);
     if (usedStops) {

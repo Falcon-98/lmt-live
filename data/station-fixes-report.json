@@ -1,0 +1,415 @@
+{
+ "generated": "2026-10-11T14:18:39.633Z",
+ "corrected": [
+  {
+   "id": "ST_SANKATHANAI",
+   "name": "Sankathanai",
+   "osm": "Sangathanai (node/12643586317)",
+   "off": 306.2,
+   "score": 0.9
+  },
+  {
+   "id": "ST_ELIPHANT_PASS",
+   "name": "Eliphant Pass",
+   "osm": "Elephant Pass (node/1148494958)",
+   "off": 292.6,
+   "score": 0.9
+  },
+  {
+   "id": "ST_PATAGAMGODA",
+   "name": "Patagamgoda",
+   "osm": "Pathegamgoda (node/3092677804)",
+   "off": 131.7,
+   "score": 0.91
+  },
+  {
+   "id": "ST_GALABODA",
+   "name": "Galaboda",
+   "osm": "Galboda (node/1177512170)",
+   "off": 109.8,
+   "score": 0.88
+  },
+  {
+   "id": "ST_NOORANAGAR",
+   "name": "Nooranagar",
+   "osm": "Noor Nagar (node/1137449545)",
+   "off": 85.9,
+   "score": 0.89
+  },
+  {
+   "id": "ST_PARAKUMPURA",
+   "name": "Parakumpura",
+   "osm": "Parakum Uyana (node/1173676348)",
+   "off": 83.1,
+   "score": 1
+  },
+  {
+   "id": "ST_HATAMUNA",
+   "name": "Hatamuna",
+   "osm": "Hathamuna (node/4076853085)",
+   "off": 77.3,
+   "score": 1
+  },
+  {
+   "id": "ST_HATARAS_KOTUWA",
+   "name": "Hataras Kotuwa",
+   "osm": "Hatares Kotuwa (node/3092143617)",
+   "off": 70.4,
+   "score": 0.92
+  },
+  {
+   "id": "ST_KUDA_WAWA",
+   "name": "Kuda Wawa",
+   "osm": "Kudawewa (node/1137449404)",
+   "off": 47.8,
+   "score": 0.88
+  },
+  {
+   "id": "ST_VANDARAMULLAI",
+   "name": "Vandaramullai",
+   "osm": "Railway station -Vantharumoolai (way/454143853)",
+   "off": 17.5,
+   "score": 0.83
+  },
+  {
+   "id": "ST_PANALEEYA",
+   "name": "Panaleeya",
+   "osm": "Panaliya (node/1175901262)",
+   "off": 13.3,
+   "score": 1
+  },
+  {
+   "id": "ST_ERUKKALAM_PENDU",
+   "name": "Erukkalam Pendu",
+   "osm": "Erukkalampiddy (node/12630589716)",
+   "off": 6.6,
+   "score": 1
+  },
+  {
+   "id": "ST_MOLLIPATANA",
+   "name": "Mollipatana",
+   "osm": "Mullipotana (node/1728263442)",
+   "off": 4.8,
+   "score": 0.8
+  },
+  {
+   "id": "ST_ABANPOLA",
+   "name": "Abanpola",
+   "osm": "Ambanpola (node/1143313787)",
+   "off": 4,
+   "score": 0.89
+  },
+  {
+   "id": "ST_ANURADHAPURA",
+   "name": "Anuradhapura",
+   "osm": "Anuradhapura (node/12641138691)",
+   "off": 3.1,
+   "score": 1
+  },
+  {
+   "id": "ST_UDATHTHAWALA",
+   "name": "Udaththawala",
+   "osm": "Udatthawela (node/12656812981)",
+   "off": 2.5,
+   "score": 0.89
+  },
+  {
+   "id": "ST_WEWURUKANNALA",
+   "name": "Wewurukannala",
+   "osm": "Wewrukannala (node/6402509511)",
+   "off": 2.2,
+   "score": 0.92
+  },
+  {
+   "id": "ST_GALLELLA",
+   "name": "Gallella",
+   "osm": "Gallella (node/4075186466)",
+   "off": 1.9,
+   "score": 1
+  },
+  {
+   "id": "ST_ELUTHUMATTUVAL",
+   "name": "Eluthumattuval",
+   "osm": "Eluthumadduval (node/1148495492)",
+   "off": 1.9,
+   "score": 0.92
+  },
+  {
+   "id": "ST_TALAIMANNAR",
+   "name": "Talaimannar",
+   "osm": "Talaimannar (node/1168788044)",
+   "off": 1.6,
+   "score": 1
+  },
+  {
+   "id": "ST_UDATALAWINNA",
+   "name": "Udatalawinna",
+   "osm": "Uda Talawinna (node/1175899816)",
+   "off": 1.6,
+   "score": 1
+  },
+  {
+   "id": "ST_THODDAVELI",
+   "name": "Thoddaveli",
+   "osm": "Thoddaweli (node/5785426625)",
+   "off": 1.4,
+   "score": 1
+  },
+  {
+   "id": "ST_ERATTAPERIYAKULAM",
+   "name": "Erattaperiyakulam",
+   "osm": "Iratperiya Kulam (node/3091412586)",
+   "off": 1.4,
+   "score": 0.87
+  },
+  {
+   "id": "ST_KOKUVIL",
+   "name": "Kokuvil",
+   "osm": "Kokkuvil (node/12643612532)",
+   "off": 1.2,
+   "score": 1
+  },
+  {
+   "id": "ST_KANKESANTHURAI",
+   "name": "Kankesanthurai",
+   "osm": "Kankesanturai (node/7563703339)",
+   "off": 1.2,
+   "score": 1
+  },
+  {
+   "id": "ST_TELLIPALLAI",
+   "name": "Tellipallai",
+   "osm": "Tellipalai (node/7563703164)",
+   "off": 1.1,
+   "score": 1
+  },
+  {
+   "id": "ST_KAKANADURA",
+   "name": "Kakanadura",
+   "osm": "Kekanadura (node/7483359602)",
+   "off": 1,
+   "score": 0.9
+  },
+  {
+   "id": "ST_BANGADENIYA",
+   "name": "Bangadeniya",
+   "osm": "Bangadeniya (node/1137449694)",
+   "off": 0.9,
+   "score": 1
+  },
+  {
+   "id": "ST_BATTICALOA",
+   "name": "Batticaloa",
+   "osm": "Batticaloa (node/1895581441)",
+   "off": 0.8,
+   "score": 1
+  },
+  {
+   "id": "ST_POONEWA",
+   "name": "Poonewa",
+   "osm": "Punewa (node/3092822215)",
+   "off": 0.7,
+   "score": 1
+  },
+  {
+   "id": "ST_IHALAWATAWALA",
+   "name": "Ihalawatawala",
+   "osm": "Ihala Watawala (node/1177512876)",
+   "off": 0.6,
+   "score": 1
+  },
+  {
+   "id": "ST_TALAIMANNAR_PIER",
+   "name": "Talaimannar Pier",
+   "osm": "Talaimannar (node/1168788044)",
+   "off": 0.6,
+   "score": 0.9
+  },
+  {
+   "id": "ST_SAWARANA",
+   "name": "Sawarana",
+   "osm": "Sawarana (node/2841624940)",
+   "off": 0.5,
+   "score": 1
+  },
+  {
+   "id": "ST_NEGAMA",
+   "name": "Negama",
+   "osm": "Negama (node/3092596010)",
+   "off": 0.4,
+   "score": 1
+  },
+  {
+   "id": "ST_KODIKAMAM",
+   "name": "Kodikamam",
+   "osm": "Kodaikamam (node/1148494997)",
+   "off": 0.4,
+   "score": 0.9
+  },
+  {
+   "id": "ST_CHEDDIIKULAM",
+   "name": "Cheddiikulam",
+   "osm": "Chettikulam (node/12641163384)",
+   "off": 0.4,
+   "score": 0.9
+  },
+  {
+   "id": "ST_GAMMANA",
+   "name": "Gammana",
+   "osm": "Gammana (node/3092123008)",
+   "off": 0.3,
+   "score": 1
+  },
+  {
+   "id": "ST_KILINOCHCHI",
+   "name": "Kilinochchi",
+   "osm": "Kilinochchi (node/12643554855)",
+   "off": 0.3,
+   "score": 1
+  }
+ ],
+ "approximate": [
+  {
+   "id": "ST_RANAMUGGAMUWA",
+   "name": "Ranamuggamuwa",
+   "off": 19.7,
+   "between": "Moragollagama – Konwewa"
+  },
+  {
+   "id": "ST_MEDAGAMA",
+   "name": "Medagama",
+   "off": 130.2,
+   "between": "Parasangahawewa – Medawachchiya"
+  },
+  {
+   "id": "ST_BUTHGAMUWA",
+   "name": "Buthgamuwa",
+   "off": 50.5,
+   "between": "Alawwa – Yattalgoda"
+  }
+ ],
+ "unmatched": [
+  {
+   "id": "ST_UGGALLA",
+   "name": "Uggalla",
+   "lat": 6.8627803,
+   "lon": 80.1140964
+  },
+  {
+   "id": "ST_UDHAMULLA",
+   "name": "Udhamulla",
+   "lat": 6.8791,
+   "lon": 79.9212
+  },
+  {
+   "id": "ST_KADADASI_NAGAR",
+   "name": "Kadadasi Nagar",
+   "lat": 7.9284872,
+   "lon": 81.5077805
+  },
+  {
+   "id": "ST_DEWAPURAM",
+   "name": "Dewapuram",
+   "lat": 7.8269409,
+   "lon": 81.5572288
+  },
+  {
+   "id": "ST_AUKANA",
+   "name": "Aukana",
+   "lat": 8.0045647,
+   "lon": 80.5116315
+  },
+  {
+   "id": "ST_SIYALANGAMUWA",
+   "name": "Siyalangamuwa",
+   "lat": 7.942496,
+   "lon": 80.4496558
+  },
+  {
+   "id": "ST_IHALAGAMA",
+   "name": "Ihalagama",
+   "lat": 8.0584255,
+   "lon": 80.5528316
+  },
+  {
+   "id": "ST_YAPAHUWA",
+   "name": "Yapahuwa",
+   "lat": 7.8185613,
+   "lon": 80.3131565
+  },
+  {
+   "id": "ST_TRAIN_HALT_01",
+   "name": "Train Halt 01",
+   "lat": 6.6327574,
+   "lon": 79.940296
+  },
+  {
+   "id": "ST_MUNDAL",
+   "name": "Mundal",
+   "lat": 7.7978699,
+   "lon": 79.8255913
+  },
+  {
+   "id": "ST_PILADUWA",
+   "name": "Piladuwa",
+   "lat": 5.9592,
+   "lon": 80.5606
+  },
+  {
+   "id": "ST_MURUNKAN",
+   "name": "Murunkan",
+   "lat": 8.8326402,
+   "lon": 80.0323925
+  },
+  {
+   "id": "ST_THILLADIYA",
+   "name": "Thilladiya",
+   "lat": 8.0121151,
+   "lon": 79.8363545
+  },
+  {
+   "id": "ST_MANGALAELIYA",
+   "name": "Mangalaeliya",
+   "lat": 7.8597611,
+   "lon": 79.8211301
+  },
+  {
+   "id": "ST_PULACHCHIKULAM",
+   "name": "Pulachchikulam",
+   "lat": 7.7574758,
+   "lon": 79.8280778
+  },
+  {
+   "id": "ST_ANAWILUNDAWA",
+   "name": "Anawilundawa",
+   "lat": 7.7034032,
+   "lon": 79.8281139
+  },
+  {
+   "id": "ST_ARACHCHIKATTUWA",
+   "name": "Arachchikattuwa",
+   "lat": 7.6675079,
+   "lon": 79.8286305
+  },
+  {
+   "id": "ST_YATAWARA",
+   "name": "Yatawara",
+   "lat": 7.3728602,
+   "lon": 80.6698874
+  },
+  {
+   "id": "ST_YATIRAWANA",
+   "name": "Yatirawana",
+   "lat": 7.3481,
+   "lon": 80.6702
+  },
+  {
+   "id": "ST_PATHANPHA",
+   "name": "Pathanpha",
+   "lat": 7.3789,
+   "lon": 80.6784
+  }
+ ],
+ "impossibleSegmentsBefore": 85,
+ "impossibleSegmentsAfter": 15
+}

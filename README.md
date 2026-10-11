@@ -56,6 +56,22 @@ A diagnostic workflow ([`probe-feeds`](.github/workflows/probe-feeds.yml)) and a
 
 Run either workflow from the Actions tab to re-check at any time; `live-smoke` also runs every 6 hours.
 
+## Railway station positions (corrected)
+
+The SLR `stops.txt` published by the feed server places many stations in the wrong place. In the most extreme case, Sankathanai and Eliphant Pass shared one coordinate about **300 km** from where they are. Medagama, Patagamgoda, Galboda, Parakumpura, Noor Nagar, Hathamuna and others were also **50–130 km** off. Before the fix, 85 consecutive-station segments implied impossible train speeds of 700–9,000 km/h.
+
+[`tools/fix-stations.mjs`](tools/fix-stations.mjs) fixes this against **OpenStreetMap**. The [`osm-stations`](.github/workflows/osm-stations.yml) workflow keeps a snapshot of OSM's 921 Sri Lankan railway station entries in `data/osm-stations-lk.json`. The tool then does three things:
+- **Matches** every SLR station to OSM. Matching is by name, and tolerates transliteration differences such as *Sankathanai/Sangathanai*, *Hatamuna/Hathamuna* and *Panaleeya/Panaliya*. A candidate is rejected if it would put the station far from its neighbours on the line, so similarly named stations on different lines (*Parakumpura* and *Perakumpura*) aren't confused.
+- **Corrects** 38 stations that were more than 300 m from their OSM position.
+- **Estimates** positions for 3 misplaced stations that OSM doesn't have (Medagama, Buthgamuwa, Ranamuggamuwa). Each is placed on the track between its neighbours, in proportion to the timetable, and marked approximate.
+
+The result is written to [`assets/station-fixes.js`](assets/station-fixes.js) and applied before anything uses the coordinates, so train positions are corrected too. The full list is in [`data/station-fixes-report.json`](data/station-fixes-report.json). After the fix:
+- **Impossible segments:** 15 remain, down from 85. Each lies between two stations confirmed by OSM, so they are **timetable** errors in the feed, not location errors.
+- **Confirmed:** 280 stations were already within 300 m of OSM.
+- **Unverified:** 20 small halts that aren't in OSM, kept as published because they sit plausibly between their neighbours.
+
+To re-check after the feed changes: run the `osm-stations` workflow, then `node tools/fix-stations.mjs <unzipped SLR GTFS dir>`.
+
 ## How trains are tracked
 
 The feed server carries the complete SLR timetable: 9 lines, about 500 trips with stop times, and track shapes. As far as public sources show, it has **not documented a live GPS feed for trains**. So trains are shown in layers, with each train labelled by where its data comes from:
@@ -160,3 +176,4 @@ The fixtures in `tests/fixtures.js` reproduce the real feed's quirks: UUID route
 - **Transit data:** © Lanka Metro Transit, **CC-BY-4.0**. Attribution is required wherever the data is shown (the panel footer does this).
 - **Map tiles:** © OpenStreetMap contributors.
 - **Rail timetable:** Sri Lanka Railways schedule as republished by transit.seyone.dev.
+- **Station corrections:** © OpenStreetMap contributors, ODbL.

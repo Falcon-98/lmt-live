@@ -46,6 +46,8 @@
         staticPaths: ["/gtfs/download?agency=SLR", "/gtfs/download"],
         staticMirrors: [],
         // The SLR feed has no route colours; these keep each line recognisable.
+        // The published SLR stops.txt has many stations in the wrong place; corrected from OpenStreetMap.
+        stopFixes: window.LMT_STATION_FIXES || {},
         colors: { Main: "#c62828", Coast: "#1565c0", Puttalam: "#2e7d32", Northern: "#6a1b9a", Kelani: "#ef6c00",
           Batticaloa: "#00838f", Trincomalee: "#ad1457", Talaimannar: "#5d4037", Suburban: "#546e7a" },
         serviceHours: [240, 1440]
@@ -206,8 +208,8 @@
   function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600); }
 
   /* ---------------- static GTFS ---------------- */
-  const cacheKey = sys => "lmt-static-v4-" + sys.id;
-  try { ["lmt-static-v2", "lmt-static-v3-LMT", "lmt-static-v3-SLR", "lmt-hidden-routes"].forEach(k => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+  const cacheKey = sys => "lmt-static-v5-" + sys.id; // v5: corrected station positions
+  try { ["lmt-static-v2", "lmt-static-v3-LMT", "lmt-static-v3-SLR", "lmt-static-v4-LMT", "lmt-static-v4-SLR", "lmt-hidden-routes"].forEach(k => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
   async function downloadStatic(sys) {
     const tries = sys.staticPaths.map(p => () => apiFetch(p, 60000)).concat(sys.staticMirrors.map(u => () => fetchWithTimeout(u, 60000)));
     let last;
@@ -222,7 +224,7 @@
           files[n] = await read(n + ".txt");
         }
         if (!files.routes || !files.stops) throw new FeedError("zip has no routes/stops", "data");
-        const data = C.buildStatic(files, { agency: sys.id, schedule: sys.schedule, colors: sys.colors });
+        const data = C.buildStatic(files, { agency: sys.id, schedule: sys.schedule, colors: sys.colors, stopFixes: sys.stopFixes });
         if (!data.routes.length) throw new FeedError("no " + sys.id + " routes in this download", "data");
         return { data, source: i < sys.staticPaths.length ? "live" : "mirror" };
       } catch (e) { last = e; }

@@ -126,7 +126,7 @@ test("gtfsTime parses times past midnight", () => {
 
 test("SLR static: colours from config, schedule built", () => {
   assert.equal(slr.routes[0].color, "#1565c0");
-  assert.equal(slr.schedule.trips.length, 5);
+  assert.equal(slr.schedule.trips.length, 6);
   assert.ok(slr.schedule.shapes.SHAPE_COAST_LINE.length > 5);
 });
 
@@ -155,7 +155,7 @@ test("scheduled trains: live delay shifts position, live GPS trips are skipped",
 
 test("departures board: upcoming trains with delays, cancellations and arrivals", () => {
   const dep = C.departures(slr, "ST_MORATUWA", { now: NOW, delays: new Map([["TR_2", 360]]), cancelled: new Set(["TR_3"]) });
-  assert.deepEqual(dep.map(d => d.tripId), ["TR_1", "TR_2", "TR_3"].filter(id => dep.some(d => d.tripId === id)));
+  assert.deepEqual(dep.map(d => d.tripId), ["TR_1", "TR_2", "TR_6", "TR_3"], "ordered by expected time");
   const d2 = dep.find(d => d.tripId === "TR_2"); assert.equal(d2.time - d2.planned, 360);
   const d3 = dep.find(d => d.tripId === "TR_3"); assert.ok(d3 && d3.cancelled);
   assert.ok(!dep.find(d => d.tripId === "TR_5"));
@@ -188,4 +188,23 @@ test("single-agency feed with a partial timetable keeps all its stops", () => {
   const s = C.buildStatic(f, { agency: "LMT", schedule: true });
   assert.equal(C.indexStatic(s).platforms.length, 9);
   assert.equal(s.schedule.trips.length, 1);
+});
+
+test("trains waiting to depart: only those leaving within the window, placed at their origin", () => {
+  const v = C.scheduledVehicles(slr, { now: NOW, preDepartSec: 1800 });
+  assert.deepEqual(v.map(x => x.id).sort(), ["TR_1", "TR_2", "TR_4", "TR_6"], "TR_3 leaves in 45 min → hidden");
+  const w = v.find(x => x.id === "TR_6");
+  assert.equal(w.waiting, true); assert.equal(w.atStop, "ST_COLOMBO_FORT");
+  assert.equal(Math.round((w.departsAt - NOW) / 60), 12);
+  assert.equal(w.progress, 0);
+  assert.ok(!C.scheduledVehicles(slr, { now: NOW }).find(x => x.id === "TR_6"), "no window → running trains only");
+  const late = C.scheduledVehicles(slr, { now: NOW, preDepartSec: 1800, delays: new Map([["TR_2", 360]]) }).find(x => x.id === "TR_2");
+  assert.equal(late.waiting, true, "a late train that hasn't left yet waits at its origin");
+});
+
+test("running trip exposes a timeline and progress", () => {
+  const t1 = C.scheduledVehicles(slr, { now: NOW }).find(x => x.id === "TR_1");
+  assert.equal(t1.timeline.length, 6);
+  assert.ok(t1.timeline[0].passed && !t1.timeline[5].passed);
+  assert.ok(t1.progress > 0 && t1.progress < 1);
 });

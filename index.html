@@ -6,6 +6,11 @@
 <title>LMT Live Transit</title>
 <meta name="description" content="Live map of Lanka Metro Transit (LMT) buses and Sri Lanka Railways trains — real-time positions, routes, stops, station departures and service alerts from open GTFS and GTFS-Realtime feeds.">
 <meta name="theme-color" content="#121417">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121417'/%3E%3Crect x='7' y='6' width='18' height='17' rx='3' fill='%23f2a51a'/%3E%3Crect x='9.5' y='9' width='13' height='6' rx='1' fill='%23121417'/%3E%3Ccircle cx='11' cy='25' r='2' fill='%23f2a51a'/%3E%3Ccircle cx='21' cy='25' r='2' fill='%23f2a51a'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,6 +37,7 @@
   </div>
   <div class="actions">
     <button class="icon-btn" id="refresh" title="Refresh now" aria-label="Refresh now"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="icon-btn" id="fit" title="Show everything" aria-label="Zoom to show everything"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button class="icon-btn" id="locate" title="Stops near me" aria-label="Show stops near me"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
     <button class="icon-btn" id="theme" title="Toggle dark / light" aria-label="Toggle dark or light theme"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18z" fill="currentColor"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
   </div>
@@ -40,8 +46,19 @@
 <div class="banner" id="banner" role="alert"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<details class="legend" id="legend">
+  <summary aria-label="Map legend">Legend</summary>
+  <ul>
+    <li><i class="lg-gps"></i>Live GPS position</li>
+    <li><i class="lg-est"></i>⏱ Timetable position (no GPS)</li>
+    <li><i class="lg-wait"></i>⏳ Waiting to depart (next 30 min)</li>
+    <li><i class="lg-stop"></i>Bus stop <i class="lg-stn"></i>Station</li>
+    <li class="kbd"><kbd>/</kbd> search · <kbd>Esc</kbd> back · <kbd>1</kbd>–<kbd>4</kbd> tabs</li>
+  </ul>
+</details>
+
 <section class="panel" id="panel" aria-label="Transit data">
-  <button class="grab" aria-label="Expand or collapse panel"><i></i></button>
+  <button class="grab" aria-label="Resize panel (drag or tap)"><i></i></button>
   <div class="search"><input id="q" type="search" placeholder="Search buses, trains, plates…" aria-label="Search" autocomplete="off"></div>
   <div class="modes" role="group" aria-label="Show">
     <button data-mode="all" aria-pressed="true">All</button>
@@ -55,14 +72,14 @@
     <button role="tab" aria-selected="false" data-pane="alerts" aria-controls="pane-alerts" tabindex="-1">Alerts<span class="count" id="c-alerts">0</span></button>
   </div>
   <div class="tabpanes">
-    <div class="pane show" id="pane-vehicles" role="tabpanel"><div class="empty">Connecting to live buses &amp; trains…</div></div>
-    <div class="pane" id="pane-routes" role="tabpanel"><div class="empty">Loading routes…</div></div>
-    <div class="pane" id="pane-stops" role="tabpanel"><div class="empty">Loading stops…</div></div>
+    <div class="pane show" id="pane-vehicles" role="tabpanel"><div class="skel"><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div></div></div>
+    <div class="pane" id="pane-routes" role="tabpanel"><div class="skel"><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div></div></div>
+    <div class="pane" id="pane-stops" role="tabpanel"><div class="skel"><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div><div class="sk"><i></i><span><b></b><b></b></span></div></div></div>
     <div class="pane" id="pane-alerts" role="tabpanel"><div class="empty">Checking for service alerts…</div></div>
   </div>
   <footer class="footer">
     <details><summary>Feed status</summary><ul id="feed-details" class="feeds"></ul></details>
-    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a> (CC-BY-4.0) and Sri Lanka Railways timetables via <a href="https://api.transit.seyone.dev" target="_blank" rel="noopener">transit.seyone.dev</a>. Unofficial — not affiliated with LMT or SLR. ⏱ marks trains placed from the timetable, not GPS.</div>
+    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a> (CC-BY-4.0) and Sri Lanka Railways timetables via <a href="https://api.transit.seyone.dev" target="_blank" rel="noopener">transit.seyone.dev</a>. Unofficial — not affiliated with LMT or SLR. ⏱ marks vehicles placed from the timetable, not GPS.</div>
   </footer>
 </section>
 

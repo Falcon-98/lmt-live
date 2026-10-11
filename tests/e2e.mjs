@@ -13,7 +13,7 @@ const F = require("./fixtures.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHOTS = path.join(ROOT, "tests", "screenshots");
 fs.mkdirSync(SHOTS, { recursive: true });
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png" };
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json" };
 let mode = "ok"; // "ok" | "down" | "slr-no-rt" | "lmt-empty" (GPS feed online but empty, as observed live on 2026-10-11)
 let hits = {};
 
@@ -74,19 +74,22 @@ async function open(viewport, url) {
 try {
   console.log("Desktop, healthy feeds");
   const { page, errors } = await open({ width: 1280, height: 800 }, "/?api=" + encodeURIComponent(base + "/api/v1"));
-  await page.waitForFunction(() => document.querySelectorAll(".veh.bus").length >= 4 && document.querySelectorAll(".veh.train").length >= 2, null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll(".veh.bus").length >= 4 && document.querySelectorAll(".veh.train").length >= 4, null, { timeout: 15000 });
   await page.waitForTimeout(1500);
   check((await page.locator(".veh.bus").count()) === 4, "exactly 4 LMT buses (stale, duplicate, train, out-of-area and 0,0 records dropped)");
   check((await page.locator(".veh.bus .tag").allTextContents()).sort().join() === "CM01,CM02,CM02,CM05", "3D bus markers labelled with resolved route codes");
   check((await page.locator(".veh.bus svg.g").count()) === 4, "buses drawn as 3D SVG vehicles");
   check((await page.locator(".veh.bus.stale").count()) === 1, "4-minute-old bus faded as stale");
   check((await page.locator(".veh.bus.moving").count()) >= 2, "moving buses animate (bob + wheel spin)");
-  check((await page.locator(".veh.train").count()) === 2, "2 trains: TR_4 live GPS + TR_1 timetable (TR_2 6 min late hasn't left, TR_3 not yet, TR_5 cancelled)");
-  check((await page.locator(".veh.train.gps").count()) === 1 && (await page.locator(".veh.train.est").count()) === 1, "live GPS vs timetable trains distinguished");
+  check((await page.locator(".veh.train").count()) === 4, "4 trains: TR_4 GPS, TR_1 running, TR_2 (6 min late) + TR_6 waiting to depart; TR_3 (45 min away) and cancelled TR_5 hidden");
+  check((await page.locator(".veh.train.gps").count()) === 1 && (await page.locator(".veh.train.est:not(.wait)").count()) === 1 && (await page.locator(".veh.train.wait").count()) === 2, "live GPS, timetable and waiting trains distinguished");
+  check(/1[12]′/.test(await page.locator(".veh.train.wait .tag").allTextContents().then(t => t.join(" "))), "waiting train tag counts down to departure");
+  const wb = await page.locator(".veh.train.wait").evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return Math.round(r.x) + "," + Math.round(r.y); }));
+  check(new Set(wb).size === 2, "two trains waiting at Colombo Fort are fanned out, not stacked");
   check(await page.locator("#c-routes").textContent() === "3", "3 routes (2 bus + 1 rail line)");
   check(await page.locator("#c-stops").textContent() === "15", "15 stops (9 bus stops + 6 stations)");
   check((await page.locator(".leaflet-routes-pane path").count()) === 3, "2 CM01 shapes + Coast Line drawn");
-  check(/Live · 4 buses · 1 live train \+ 1 ⏱ scheduled/.test(await page.locator("#status").textContent()), "status line counts buses and trains, live vs scheduled");
+  check(/Live · 4 buses · 1 live train \+ 1 ⏱ scheduled \+ 2 ⏳ departing/.test(await page.locator("#status").textContent()), "status line counts live, scheduled and departing");
   check(await page.locator("#h-bus").getAttribute("class") === "dot ok" && await page.locator("#h-train").getAttribute("class") === "dot ok", "bus and train feeds healthy");
   check(await page.locator("#c-alerts").textContent() === "3", "3 alerts (2 bus + 1 rail)");
   await page.screenshot({ path: path.join(SHOTS, "desktop.png") });
@@ -108,9 +111,10 @@ try {
   await page.locator('[data-veh="SLR:TR_1"]').click();
   await page.waitForTimeout(700);
   const tp = await page.locator(".leaflet-popup .pop").last().textContent();
-  const ib = await page.locator(".veh.train.est").boundingBox();
+  const ib = await page.locator(".veh.train.est:not(.wait)").boundingBox();
   check(ib && ib.x > 0 && ib.x + ib.width < 900 && ib.y > 58, "focused train is on screen, clear of the panel");
-  check(/Estimated from timetable/.test(tp) && /Colombo Fort → Panadura/.test(tp) && /Next stops/.test(tp), "timetable train popup: label, headsign, next stops");
+  check(/Timetable position/.test(tp) && /Colombo Fort → Panadura/.test(tp) && /Stops & times/.test(tp), "timetable train popup: label, headsign, stop timeline");
+  check((await page.locator(".leaflet-popup .pb i").count()) === 1 && (await page.locator(".leaflet-popup .tl li").count()) >= 6, "train popup shows journey progress and every stop");
   await page.screenshot({ path: path.join(SHOTS, "train-popup.png") });
 
   await page.locator('[data-veh="SLR:8058"]').click();
@@ -139,12 +143,32 @@ try {
 
   await page.locator('.modes [data-mode="train"]').click();
   await page.waitForTimeout(400);
-  check((await page.locator(".veh.bus").count()) === 0 && (await page.locator(".veh.train").count()) === 2, "Trains filter hides buses");
+  check((await page.locator(".veh.bus").count()) === 0 && (await page.locator(".veh.train").count()) === 4, "Trains filter hides buses");
   check(await page.locator("#c-alerts").textContent() === "1", "alert count follows the filter");
   await page.locator('[role=tab][data-pane="vehicles"]').click();
   await page.screenshot({ path: path.join(SHOTS, "trains-mode.png") });
   await page.locator('.modes [data-mode="all"]').click();
   await page.waitForTimeout(300);
+
+  console.log("  — departing-soon section, route focus, favourites, keyboard");
+  await page.locator('[role=tab][data-pane="vehicles"]').click();
+  const pv = await page.locator("#pane-vehicles").textContent();
+  check(/Departing in the next 30 min/.test(pv) && /Departs \d\d:\d\d · in \d+ min · Colombo Fort/.test(pv), "list has a 'departing in the next 30 min' section");
+  await page.locator('[role=tab][data-pane="routes"]').click();
+  await page.locator(`[data-route="LMT:${F.CM02}"] .t`).click();
+  await page.waitForTimeout(400);
+  check((await page.locator(".veh.bus").count()) === 2 && (await page.locator(".focus").count()) === 1, "tapping a route shows only its vehicles, with a clear-focus chip");
+  await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+  if (await page.locator(".focus").count()) { await page.keyboard.press("Escape"); await page.waitForTimeout(300); }
+  check((await page.locator(".veh.bus").count()) === 4 && (await page.locator(".focus").count()) === 0, "Esc clears the route focus");
+  await page.locator('[role=tab][data-pane="stops"]').click();
+  await page.locator('[data-stop="LMT:104"]').click(); await page.waitForTimeout(700);
+  await page.locator(".leaflet-popup [data-fav]").click(); await page.waitForTimeout(300);
+  await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+  check(/★ Saved/.test(await page.locator("#pane-stops").textContent()), "☆ saves a stop to the top of the Stops list");
+  await page.locator("#map").click({ position: { x: 300, y: 400 } }); await page.keyboard.press("/");
+  check(await page.evaluate(() => document.activeElement && document.activeElement.id === "q"), "'/' focuses search");
+  await page.keyboard.press("Escape");
 
   await page.locator('[role=tab][data-pane="routes"]').click();
   await page.locator(`[data-toggle="LMT:${F.CM02}"]`).uncheck();
@@ -155,15 +179,20 @@ try {
   await page.locator("#q").fill("borella");
   await page.locator('[role=tab][data-pane="stops"]').click();
   await page.waitForTimeout(300);
-  check((await page.locator("#pane-stops [data-stop]").count()) === 1, "search filters stops");
+  const hits2 = await page.locator("#pane-stops [data-stop] .t").allTextContents();
+  check(hits2.length >= 1 && hits2.every(t => /Borella/.test(t)), "search filters stops (saved + matching only)");
   await page.locator("#q").fill("");
 
   await page.mouse.move(0, 0);
-  const box = await page.locator(".veh.bus").first().boundingBox();
+  await page.locator("#fit").click(); await page.waitForTimeout(600);
+  const vis = page.locator(".veh.bus").filter({ hasNot: page.locator(".dim") });
+  let box = null; for (let i = 0; i < await vis.count(); i++) { const b = await vis.nth(i).boundingBox(); if (b && b.x > 20 && b.x < 850 && b.y > 70 && b.y < 740) { box = b; break; } }
   await page.mouse.move(box.x + box.width / 2, box.y + 12);
   await page.waitForTimeout(300);
-  const scale = await page.locator(".veh.bus").first().evaluate(el => getComputedStyle(el).transform);
+  const scale = box ? await page.evaluate(([x, y]) => { const el = document.elementFromPoint(x, y); const v = el && el.closest(".veh"); return v ? getComputedStyle(v).transform : "none"; }, [box.x + box.width / 2, box.y + 12]) : "none";
   check(scale !== "none", "hover lifts and enlarges the vehicle");
+  const mf = await page.evaluate(async () => { const r = await fetch("manifest.webmanifest"); return r.ok && (await r.json()).short_name; });
+  check(mf === "LMT Live", "web app manifest served (installable)");
   check(errors.length === 0, "no page errors" + (errors.length ? ": " + errors.join(" | ") : ""));
   check(Object.keys(hits).every(k => hits[k] > 0) && hits["realtime/vehicle-positions"] >= 2, "all endpoints requested for both agencies");
   await page.close();
@@ -180,8 +209,8 @@ try {
   console.log("SLR publishes no realtime (timetable only)");
   mode = "slr-no-rt";
   const p4 = await open({ width: 1280, height: 800 }, "/?api=" + encodeURIComponent(base + "/api/v1"));
-  await p4.page.waitForFunction(() => document.querySelectorAll(".veh.train").length >= 3, null, { timeout: 15000 });
-  check((await p4.page.locator(".veh.train.est").count()) === 3 && (await p4.page.locator(".veh.train.gps").count()) === 0, "all running trains shown from the timetable");
+  await p4.page.waitForFunction(() => document.querySelectorAll(".veh.train").length >= 4, null, { timeout: 15000 });
+  check((await p4.page.locator(".veh.train.est").count()) === 4 && (await p4.page.locator(".veh.train.gps").count()) === 0 && (await p4.page.locator(".veh.train.wait").count()) === 1, "running trains + the one leaving in 12 min, all from the timetable");
   check(await p4.page.locator("#h-train").getAttribute("class") === "dot warn", "train status shows timetable-only (amber)");
   check(!(await p4.page.locator("#banner.show").count()), "no error banner for missing train realtime");
   await p4.page.close();
@@ -199,7 +228,7 @@ try {
   check(await p5.page.locator("#c-stops").textContent() === "9", "all bus stops kept although the timetable covers only CM01");
   await p5.page.locator('[data-veh^="LMT:TRIP_CM01_D0_T1"]').click();
   await p5.page.waitForTimeout(600);
-  check(/Scheduled position \(no live GPS\)/.test(await p5.page.locator(".leaflet-popup .pop").textContent()), "scheduled bus popup says it is not GPS");
+  check(/Scheduled position — no live GPS/.test(await p5.page.locator(".leaflet-popup .pop").textContent()), "scheduled bus popup says it is not GPS");
   check(p5.errors.length === 0, "no page errors" + (p5.errors.length ? ": " + p5.errors.join(" | ") : ""));
   await p5.page.screenshot({ path: path.join(SHOTS, "lmt-empty.png") });
   await p5.page.close();

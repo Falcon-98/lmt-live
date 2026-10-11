@@ -1,0 +1,25 @@
+name: osm-stations
+# Refreshes data/osm-stations-lk.json (Sri Lankan railway stations from OpenStreetMap)
+# which tools/fix-stations.mjs uses to correct wrong station coordinates in the SLR feed.
+on:
+  workflow_dispatch:
+  push:
+    paths: ["tools/fetch-osm-stations.mjs", ".github/workflows/osm-stations.yml"]
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/fetch-osm-stations.mjs
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/osm-stations-lk.json
+          git diff --cached --quiet || (git commit -m "Update OSM railway stations snapshot" && git push)

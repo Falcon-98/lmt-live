@@ -101,4 +101,60 @@ function alertsFeed(now) {
   ] });
 }
 
-module.exports = { CM01, CM02, files, staticZip, vehiclesFeed, tripUpdatesFeed, alertsFeed, FeedMessage };
+/* ---------- Sri Lanka Railways (timetable built around `now`, Colombo time) ---------- */
+const STATIONS = [["ST_COLOMBO_FORT", "Colombo Fort", 6.9344, 79.8500], ["ST_KOLLUPITIYA", "Kollupitiya", 6.9110, 79.8490],
+  ["ST_WELLAWATTE", "Wellawatte", 6.8740, 79.8570], ["ST_MOUNT_LAVINIA", "Mount Lavinia", 6.8320, 79.8630],
+  ["ST_MORATUWA", "Moratuwa", 6.7740, 79.8820], ["ST_PANADURA", "Panadura", 6.7130, 79.9040]];
+function colombo(now) { // {ymd, sec} in Asia/Colombo (UTC+5:30, no DST)
+  const d = new Date((now + 5.5 * 3600) * 1000);
+  return { ymd: d.toISOString().slice(0, 10).replace(/-/g, ""), sec: d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds(),
+    yday: new Date((now + 5.5 * 3600 - 86400) * 1000).toISOString().slice(0, 10).replace(/-/g, "") };
+}
+const hms = t => [Math.floor(t / 3600), Math.floor(t % 3600 / 60), t % 60].map(x => String(x).padStart(2, "0")).join(":");
+/** trip offsets in minutes from now: first departure, 6 min between stations, 1 min dwell */
+function slrFiles(now) {
+  const c = colombo(now); const base = c.sec < 4 * 3600 ? c.sec + 86400 : c.sec; // keep times on one service day
+  const trips = [["TR_1", -10, "Colombo Fort → Panadura", false], ["TR_2", -4, "Colombo Fort → Panadura", false],
+    ["TR_3", 45, "Colombo Fort → Panadura", false], ["TR_4", -16, "Panadura → Colombo Fort", true], ["TR_5", -8, "Colombo Fort → Panadura", false]];
+  let st = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
+  trips.forEach(([id, off, , rev]) => {
+    const order = rev ? STATIONS.slice().reverse() : STATIONS;
+    order.forEach((s, i) => { const arr = base + off * 60 + i * 7 * 60; st += id + "," + hms(arr) + "," + hms(arr + (i && i < order.length - 1 ? 60 : 0)) + "," + s[0] + "," + (i + 1) + "\n"; });
+  });
+  const line = [[6.9344, 79.85], [6.92, 79.8488], [6.9110, 79.849], [6.89, 79.853], [6.874, 79.857], [6.85, 79.86], [6.832, 79.863], [6.80, 79.872], [6.774, 79.882], [6.74, 79.893], [6.713, 79.904]];
+  return {
+    agency: "agency_id,agency_name,agency_url,agency_timezone\nSLR,Sri Lanka Railways,http://www.railway.gov.lk,Asia/Colombo\n",
+    routes: "route_id,agency_id,route_short_name,route_long_name,route_type,route_color\nCOAST_LINE,SLR,Coast,Coast Line (Colombo - Matara),2,\n",
+    stops: "stop_id,stop_name,stop_lat,stop_lon,location_type\n" + STATIONS.map(s => s.join(",") + ",0").join("\n") + "\n",
+    trips: "trip_id,route_id,service_id,trip_headsign,shape_id\n" + trips.map(([id, , head]) => id + ",COAST_LINE," + (id === "TR_5" ? "SERV_X" : "DAILY") + "," + head + ",SHAPE_COAST_LINE").join("\n") + "\n",
+    stop_times: st,
+    calendar: "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nDAILY,1,1,1,1,1,1,1,20200101,20991231\nSERV_X,1,1,1,1,1,1,1,20200101,20991231\n",
+    calendar_dates: "service_id,date,exception_type\nSERV_X," + c.ymd + ",2\nSERV_X," + c.yday + ",2\n",
+    shapes: "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n" + line.map((p, i) => "SHAPE_COAST_LINE," + p[0] + "," + p[1] + "," + (i + 1)).join("\n") + "\n"
+  };
+}
+async function slrZip(now) {
+  const zip = new JSZip(); for (const [k, v] of Object.entries(slrFiles(now))) zip.file(k + ".txt", v);
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+function slrVehiclesFeed(now) {
+  const t = Math.round(now);
+  return encode({ header: { gtfs_realtime_version: "2.0", timestamp: t }, entity: [
+    { id: "v1", vehicle: { trip: { trip_id: "TR_4", route_id: "COAST_LINE" }, vehicle: { id: "8058", label: "Train 8058" },
+      position: { latitude: 6.80, longitude: 79.872, bearing: 340, speed: 15 }, timestamp: t - 12 } },
+    { id: "v2", vehicle: { trip: { route_id: "CM01" }, vehicle: { id: "WP-BUS" }, position: { latitude: 6.9, longitude: 79.9 }, timestamp: t } }
+  ] });
+}
+function slrTripUpdatesFeed(now) {
+  return encode({ header: { gtfs_realtime_version: "2.0", timestamp: Math.round(now) }, entity: [
+    { id: "d2", trip_update: { trip: { trip_id: "TR_2", route_id: "COAST_LINE" }, delay: 360, stop_time_update: [{ stop_id: "ST_WELLAWATTE", arrival: { delay: 360 } }] } }
+  ] });
+}
+function slrAlertsFeed(now) {
+  return encode({ header: { gtfs_realtime_version: "2.0", timestamp: Math.round(now) }, entity: [
+    { id: "s1", alert: { informed_entity: [{ route_id: "COAST_LINE" }], effect: "SIGNIFICANT_DELAYS", header_text: { translation: [{ text: "Coast Line delays near Moratuwa", language: "en" }] } } }
+  ] });
+}
+
+module.exports = { CM01, CM02, files, staticZip, vehiclesFeed, tripUpdatesFeed, alertsFeed, FeedMessage,
+  slrFiles, slrZip, slrVehiclesFeed, slrTripUpdatesFeed, slrAlertsFeed, colombo };

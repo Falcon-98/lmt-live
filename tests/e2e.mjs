@@ -14,7 +14,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHOTS = path.join(ROOT, "tests", "screenshots");
 fs.mkdirSync(SHOTS, { recursive: true });
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png" };
-let mode = "ok"; // "ok" | "down"
+let mode = "ok"; // "ok" | "down" | "slr-no-rt"
 let hits = {};
 
 const server = http.createServer(async (req, res) => {
@@ -24,7 +24,16 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname.startsWith("/api/v1/")) {
     const ep = u.pathname.slice(8); hits[ep] = (hits[ep] || 0) + 1;
     if (mode === "down") { res.writeHead(503); return res.end("down"); }
-    if (u.searchParams.get("agency") !== "LMT") { res.writeHead(400); return res.end("agency param missing"); }
+    const agency = u.searchParams.get("agency");
+    if (agency === "SLR") {
+      if (ep === "gtfs/download") return send(await F.slrZip(now), "application/zip");
+      if (mode === "slr-no-rt") { res.writeHead(404); return res.end("unknown agency"); }
+      if (ep === "realtime/vehicle-positions") return send(F.slrVehiclesFeed(now), "application/x-protobuf");
+      if (ep === "realtime/trip-updates") return send(F.slrTripUpdatesFeed(now), "application/x-protobuf");
+      if (ep === "realtime/alerts") return send(F.slrAlertsFeed(now), "application/x-protobuf");
+      res.writeHead(404); return res.end();
+    }
+    if (agency !== "LMT") { res.writeHead(400); return res.end("agency param missing"); }
     if (ep === "gtfs/download") return send(await F.staticZip(), "application/zip");
     if (ep === "realtime/vehicle-positions") return send(F.vehiclesFeed(now), "application/x-protobuf");
     if (ep === "realtime/trip-updates") return send(F.tripUpdatesFeed(now), "application/x-protobuf");
@@ -44,6 +53,7 @@ const CDN = {
 };
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" });
 let failures = 0;
+const document_defs = () => fs.readFileSync(path.join(ROOT, "index.html"), "utf8").match(/<svg width="0"[\s\S]*?<\/svg>/)[0];
 const check = (cond, msg) => { console.log((cond ? "  ✓ " : "  ✗ ") + msg); if (!cond) failures++; };
 
 async function open(viewport, url) {
@@ -59,62 +69,117 @@ async function open(viewport, url) {
 try {
   console.log("Desktop, healthy feeds");
   const { page, errors } = await open({ width: 1280, height: 800 }, "/?api=" + encodeURIComponent(base + "/api/v1"));
-  await page.waitForFunction(() => document.querySelectorAll(".bus").length >= 4, null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll(".veh.bus").length >= 4 && document.querySelectorAll(".veh.train").length >= 2, null, { timeout: 15000 });
   await page.waitForTimeout(1500);
-  check((await page.locator(".bus").count()) === 4, "exactly 4 LMT buses on the map (stale, duplicate, train, out-of-area and 0,0 records dropped)");
-  check((await page.locator(".bus span").allTextContents()).sort().join() === "CM01,CM02,CM02,CM05", "bus markers labelled with route codes resolved from code, trip id and UUID");
-  check((await page.locator(".bus.stale").count()) === 1, "4-minute-old position shown faded as stale");
-  check(await page.locator("#c-routes").textContent() === "2", "2 routes");
-  check(await page.locator("#c-stops").textContent() === "9", "9 platform stops (parent hub excluded)");
-  check((await page.locator(".leaflet-routes-pane path").count()) === 2, "CM01 route lines drawn from name-matched shapes");
-  check(/Live · 4 buses/.test(await page.locator("#status").textContent()), "status line shows live count");
-  check(await page.locator("#h-vehicles").getAttribute("class") === "dot ok", "vehicle feed healthy");
-  check(/WP-NE-5234/.test(await page.locator("#pane-vehicles").textContent()), "buses list shows plates");
+  check((await page.locator(".veh.bus").count()) === 4, "exactly 4 LMT buses (stale, duplicate, train, out-of-area and 0,0 records dropped)");
+  check((await page.locator(".veh.bus .tag").allTextContents()).sort().join() === "CM01,CM02,CM02,CM05", "3D bus markers labelled with resolved route codes");
+  check((await page.locator(".veh.bus svg.g").count()) === 4, "buses drawn as 3D SVG vehicles");
+  check((await page.locator(".veh.bus.stale").count()) === 1, "4-minute-old bus faded as stale");
+  check((await page.locator(".veh.bus.moving").count()) >= 2, "moving buses animate (bob + wheel spin)");
+  check((await page.locator(".veh.train").count()) === 2, "2 trains: TR_4 live GPS + TR_1 timetable (TR_2 6 min late hasn't left, TR_3 not yet, TR_5 cancelled)");
+  check((await page.locator(".veh.train.gps").count()) === 1 && (await page.locator(".veh.train.est").count()) === 1, "live GPS vs timetable trains distinguished");
+  check(await page.locator("#c-routes").textContent() === "3", "3 routes (2 bus + 1 rail line)");
+  check(await page.locator("#c-stops").textContent() === "15", "15 stops (9 bus stops + 6 stations)");
+  check((await page.locator(".leaflet-routes-pane path").count()) === 3, "2 CM01 shapes + Coast Line drawn");
+  check(/Live · 4 buses · 2 trains/.test(await page.locator("#status").textContent()), "status line counts buses and trains");
+  check(await page.locator("#h-bus").getAttribute("class") === "dot ok" && await page.locator("#h-train").getAttribute("class") === "dot ok", "bus and train feeds healthy");
+  check(await page.locator("#c-alerts").textContent() === "3", "3 alerts (2 bus + 1 rail)");
   await page.screenshot({ path: path.join(SHOTS, "desktop.png") });
+  if (process.env.CLOSEUP) {
+    const z = await browser.newPage({ viewport: { width: 400, height: 200 }, deviceScaleFactor: 4 });
+    await z.route(/cdnjs|fonts|tile\.openstreetmap|mobilitydatabase/, r => r.abort());
+    const html = await page.evaluate(() => [...document.querySelectorAll(".veh-wrap")].slice(0, 6).map(e => e.outerHTML.replace(/style="[^"]*transform[^"]*"/, "")).join(""));
+    await z.setContent('<link rel="stylesheet" href="' + base + '/assets/app.css"><style>body{background:#e9ebe6;display:flex;gap:18px;padding:30px;overflow:visible}.veh-wrap{position:relative!important;width:66px;height:54px}</style>' + document_defs() + html);
+    await z.waitForTimeout(400); await z.screenshot({ path: path.join(SHOTS, "closeup.png") }); await z.close();
+  }
 
-  await page.locator('[data-bus="WP-NE-5234"]').click();
+  await page.locator('[data-veh="LMT:WP-NE-5234"]').click();
   await page.waitForSelector(".leaflet-popup .pop");
   const pop = await page.locator(".leaflet-popup .pop").textContent();
-  check(/32 km\/h/.test(pop) && /Next stops/.test(pop) && /Borella/.test(pop), "bus popup: speed, next stops from trip updates");
+  check(/32 km\/h/.test(pop) && /Next stops/.test(pop) && /Borella/.test(pop) && /Live GPS/.test(pop), "bus popup: live GPS, speed, next stops");
+  check((await page.locator(".veh.sel").count()) === 1, "selected vehicle highlighted");
   await page.screenshot({ path: path.join(SHOTS, "bus-popup.png") });
 
+  await page.locator('[data-veh="SLR:TR_1"]').click();
+  await page.waitForTimeout(700);
+  const tp = await page.locator(".leaflet-popup .pop").last().textContent();
+  const ib = await page.locator(".veh.train.est").boundingBox();
+  check(ib && ib.x > 0 && ib.x + ib.width < 900 && ib.y > 58, "focused train is on screen, clear of the panel");
+  check(/Estimated from timetable/.test(tp) && /Colombo Fort → Panadura/.test(tp) && /Next stops/.test(tp), "timetable train popup: label, headsign, next stops");
+  await page.screenshot({ path: path.join(SHOTS, "train-popup.png") });
+
+  await page.locator('[data-veh="SLR:8058"]').click();
+  await page.waitForTimeout(700);
+  const gp = await page.locator(".leaflet-popup .pop").last().textContent();
+  check(/Live GPS/.test(gp) && /54 km\/h/.test(gp) && /Panadura → Colombo Fort/.test(gp), "live train popup: GPS, speed, headsign from timetable");
+
   await page.locator('[role=tab][data-pane="stops"]').click();
-  await page.locator('[data-stop="104"]').click();
-  await page.waitForTimeout(600);
+  await page.locator('[data-stop="SLR:ST_MORATUWA"]').click();
+  await page.waitForTimeout(800);
+  const board = await page.locator(".leaflet-popup .pop").last().textContent();
+  check(/Moratuwa/.test(board) && /\+6 min/.test(board) && /Panadura/.test(board), "station departure board with live delay");
+  const pb = await page.locator(".leaflet-popup").last().boundingBox();
+  check(pb && pb.x + pb.width < 910 && pb.y > 58, "station popup fully visible beside the panel");
+  await page.screenshot({ path: path.join(SHOTS, "station-board.png") });
+
+  await page.locator('[data-stop="LMT:104"]').click();
+  await page.waitForTimeout(800);
   check((await page.locator(".leaflet-popup").count()) === 1, "only one popup open at a time");
   const sp = await page.locator(".leaflet-popup .pop").textContent();
-  check(/CM02/.test(sp) && /CM01/.test(sp) && /min|Due/.test(sp), "stop popup lists live arrivals for both routes");
-  await page.screenshot({ path: path.join(SHOTS, "stop-popup.png") });
+  check(/CM02/.test(sp) && /CM01/.test(sp) && /min|Due/.test(sp), "bus stop popup lists live arrivals");
 
   await page.locator('[role=tab][data-pane="alerts"]').click();
   const al = await page.locator("#pane-alerts").textContent();
-  check(/CM01 diverted at Borella/.test(al) && /Smart Card/.test(al) && !/Expired/.test(al) && !/Coast line/.test(al), "alerts: active LMT alerts only");
-  check(await page.locator("#c-alerts").textContent() === "2", "alert count 2");
-  await page.screenshot({ path: path.join(SHOTS, "alerts.png") });
+  check(/CM01 diverted at Borella/.test(al) && /Coast Line delays/.test(al) && !/Expired/.test(al), "alerts from both systems, expired dropped");
+
+  await page.locator('.modes [data-mode="train"]').click();
+  await page.waitForTimeout(400);
+  check((await page.locator(".veh.bus").count()) === 0 && (await page.locator(".veh.train").count()) === 2, "Trains filter hides buses");
+  check(await page.locator("#c-alerts").textContent() === "1", "alert count follows the filter");
+  await page.locator('[role=tab][data-pane="vehicles"]').click();
+  await page.screenshot({ path: path.join(SHOTS, "trains-mode.png") });
+  await page.locator('.modes [data-mode="all"]').click();
+  await page.waitForTimeout(300);
 
   await page.locator('[role=tab][data-pane="routes"]').click();
-  await page.locator(`[data-toggle="${F.CM02}"]`).uncheck();
+  await page.locator(`[data-toggle="LMT:${F.CM02}"]`).uncheck();
   await page.waitForTimeout(300);
-  check((await page.locator(".bus").count()) === 2, "hiding CM02 removes its buses");
-  await page.locator(`[data-toggle="${F.CM02}"]`).check();
+  check((await page.locator(".veh.bus").count()) === 2, "hiding CM02 removes its buses");
+  await page.locator(`[data-toggle="LMT:${F.CM02}"]`).check();
 
   await page.locator("#q").fill("borella");
   await page.locator('[role=tab][data-pane="stops"]').click();
   await page.waitForTimeout(300);
   check((await page.locator("#pane-stops [data-stop]").count()) === 1, "search filters stops");
+  await page.locator("#q").fill("");
+
+  await page.mouse.move(0, 0);
+  const box = await page.locator(".veh.bus").first().boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 12);
+  await page.waitForTimeout(300);
+  const scale = await page.locator(".veh.bus").first().evaluate(el => getComputedStyle(el).transform);
+  check(scale !== "none", "hover lifts and enlarges the vehicle");
   check(errors.length === 0, "no page errors" + (errors.length ? ": " + errors.join(" | ") : ""));
-  check(Object.keys(hits).every(k => hits[k] > 0) && hits["realtime/vehicle-positions"] >= 1, "all endpoints requested with ?agency=LMT");
+  check(Object.keys(hits).every(k => hits[k] > 0) && hits["realtime/vehicle-positions"] >= 2, "all endpoints requested for both agencies");
   await page.close();
 
   console.log("Phone, dark theme");
   const p2 = await open({ width: 390, height: 780 }, "/?api=" + encodeURIComponent(base + "/api/v1"));
   await p2.page.emulateMedia({ colorScheme: "dark" });
-  await p2.page.waitForFunction(() => document.querySelectorAll(".bus").length >= 4, null, { timeout: 15000 });
+  await p2.page.waitForFunction(() => document.querySelectorAll(".veh.bus").length >= 4, null, { timeout: 15000 });
   await p2.page.waitForTimeout(1000);
-  const overflow = await p2.page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  check(!overflow, "no horizontal overflow at phone width");
+  check(!(await p2.page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), "no horizontal overflow at phone width");
   await p2.page.screenshot({ path: path.join(SHOTS, "phone-dark.png") });
   await p2.page.close();
+
+  console.log("SLR publishes no realtime (timetable only)");
+  mode = "slr-no-rt";
+  const p4 = await open({ width: 1280, height: 800 }, "/?api=" + encodeURIComponent(base + "/api/v1"));
+  await p4.page.waitForFunction(() => document.querySelectorAll(".veh.train").length >= 3, null, { timeout: 15000 });
+  check((await p4.page.locator(".veh.train.est").count()) === 3 && (await p4.page.locator(".veh.train.gps").count()) === 0, "all running trains shown from the timetable");
+  check(await p4.page.locator("#h-train").getAttribute("class") === "dot warn", "train status shows timetable-only (amber)");
+  check(!(await p4.page.locator("#banner.show").count()), "no error banner for missing train realtime");
+  await p4.page.close();
 
   console.log("Feed down (no cache)");
   mode = "down";
@@ -122,7 +187,7 @@ try {
   await p3.page.evaluate(() => localStorage.clear());
   await p3.page.reload();
   await p3.page.waitForFunction(() => document.querySelector("#banner.show"), null, { timeout: 20000 });
-  check((await p3.page.locator(".bus").count()) === 0, "no invented buses when the feed is down");
+  check((await p3.page.locator(".veh").count()) === 0, "no invented vehicles when feeds are down");
   check(/unavailable|error/i.test(await p3.page.locator("#pane-vehicles").textContent()), "panel explains the feed is unavailable");
   await p3.page.screenshot({ path: path.join(SHOTS, "feed-down.png") });
   await p3.page.close();

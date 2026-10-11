@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>LMT Live Transit</title>
-<meta name="description" content="Live map of Lanka Metro Transit (LMT) buses in Colombo — real-time bus positions, routes, stops, arrival predictions and service alerts from LMT's open GTFS and GTFS-Realtime feeds.">
+<meta name="description" content="Live map of Lanka Metro Transit (LMT) buses and Sri Lanka Railways trains — real-time positions, routes, stops, station departures and service alerts from open GTFS and GTFS-Realtime feeds.">
 <meta name="theme-color" content="#121417">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121417'/%3E%3Crect x='7' y='6' width='18' height='17' rx='3' fill='%23f2a51a'/%3E%3Crect x='9.5' y='9' width='13' height='6' rx='1' fill='%23121417'/%3E%3Ccircle cx='11' cy='25' r='2' fill='%23f2a51a'/%3E%3Ccircle cx='21' cy='25' r='2' fill='%23f2a51a'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
@@ -14,7 +14,10 @@
 <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
-<div id="map" role="application" aria-label="Map of live LMT buses"></div>
+<div id="map" role="application" aria-label="Map of live buses and trains"></div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <linearGradient id="lmtShine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+</defs></svg>
 
 <header class="topbar">
   <div class="brand">
@@ -23,9 +26,8 @@
   </div>
   <div class="status" id="status" role="status" aria-live="polite">Connecting…</div>
   <div class="health" aria-label="Feed status">
-    <span class="dot" id="h-static" title="Schedule"><b></b><span class="lbl">GTFS</span></span>
-    <span class="dot" id="h-vehicles" title="Live bus positions"><b></b><span class="lbl">Buses</span></span>
-    <span class="dot" id="h-tripUpdates" title="Arrival predictions"><b></b><span class="lbl">ETA</span></span>
+    <span class="dot" id="h-bus" title="Buses"><b></b><span class="lbl">Buses</span></span>
+    <span class="dot" id="h-train" title="Trains" hidden><b></b><span class="lbl">Trains</span></span>
     <span class="dot" id="h-alerts" title="Service alerts"><b></b><span class="lbl">Alerts</span></span>
   </div>
   <div class="actions">
@@ -40,26 +42,31 @@
 
 <section class="panel" id="panel" aria-label="Transit data">
   <button class="grab" aria-label="Expand or collapse panel"><i></i></button>
-  <div class="search"><input id="q" type="search" placeholder="Search buses, plates, stops…" aria-label="Search" autocomplete="off"></div>
+  <div class="search"><input id="q" type="search" placeholder="Search buses, trains, plates…" aria-label="Search" autocomplete="off"></div>
+  <div class="modes" role="group" aria-label="Show">
+    <button data-mode="all" aria-pressed="true">All</button>
+    <button data-mode="bus" aria-pressed="false"><span aria-hidden="true">🚌</span> Buses</button>
+    <button data-mode="train" aria-pressed="false"><span aria-hidden="true">🚆</span> Trains</button>
+  </div>
   <div class="tabs" role="tablist">
-    <button role="tab" aria-selected="true" data-pane="vehicles" aria-controls="pane-vehicles">Buses<span class="count" id="c-vehicles">0</span></button>
+    <button role="tab" aria-selected="true" data-pane="vehicles" aria-controls="pane-vehicles">Live<span class="count" id="c-vehicles">0</span></button>
     <button role="tab" aria-selected="false" data-pane="routes" aria-controls="pane-routes" tabindex="-1">Routes<span class="count" id="c-routes">0</span></button>
     <button role="tab" aria-selected="false" data-pane="stops" aria-controls="pane-stops" tabindex="-1">Stops<span class="count" id="c-stops">0</span></button>
     <button role="tab" aria-selected="false" data-pane="alerts" aria-controls="pane-alerts" tabindex="-1">Alerts<span class="count" id="c-alerts">0</span></button>
   </div>
   <div class="tabpanes">
-    <div class="pane show" id="pane-vehicles" role="tabpanel"><div class="empty">Connecting to live buses…</div></div>
+    <div class="pane show" id="pane-vehicles" role="tabpanel"><div class="empty">Connecting to live buses &amp; trains…</div></div>
     <div class="pane" id="pane-routes" role="tabpanel"><div class="empty">Loading routes…</div></div>
     <div class="pane" id="pane-stops" role="tabpanel"><div class="empty">Loading stops…</div></div>
     <div class="pane" id="pane-alerts" role="tabpanel"><div class="empty">Checking for service alerts…</div></div>
   </div>
   <footer class="footer">
     <details><summary>Feed status</summary><ul id="feed-details" class="feeds"></ul></details>
-    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a> (CC-BY-4.0). Unofficial — not affiliated with LMT.</div>
+    <div>Data: <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-3490" target="_blank" rel="noopener">Lanka Metro Transit</a> (CC-BY-4.0) and Sri Lanka Railways timetables via <a href="https://api.transit.seyone.dev" target="_blank" rel="noopener">transit.seyone.dev</a>. Unofficial — not affiliated with LMT or SLR. ⏱ marks trains placed from the timetable, not GPS.</div>
   </footer>
 </section>
 
-<div class="loader" id="loader"><div class="box"><div class="m">LMT LIVE</div><div class="spin"></div><div class="msg">Loading routes &amp; live buses…</div></div></div>
+<div class="loader" id="loader"><div class="box"><div class="m">LMT LIVE</div><div class="spin"></div><div class="msg">Loading buses, trains &amp; timetables…</div></div></div>
 
 <noscript><div class="noscript">LMT Live needs JavaScript to load the live bus feeds.</div></noscript>
 

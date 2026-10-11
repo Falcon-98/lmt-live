@@ -60,6 +60,8 @@ message TranslatedString { repeated Translation translation=1; message Translati
   /* Colombo metropolitan operating area. Mirrors the producer's own geofence,
      padded slightly. Used to drop positions that can't be an LMT bus. */
   const SERVICE_AREA = { minLat: 6.6, maxLat: 7.3, minLon: 79.78, maxLon: 80.25 };
+  /* Whole island, for Sri Lanka Railways. */
+  const SRI_LANKA = { minLat: 5.85, maxLat: 9.9, minLon: 79.45, maxLon: 81.95 };
 
   const OCCUPANCY = {
     EMPTY: ["good", "Empty"], MANY_SEATS_AVAILABLE: ["good", "Many seats"], FEW_SEATS_AVAILABLE: ["warn", "Few seats"],
@@ -157,7 +159,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
     const multiAgency = agencies.length > 1 || routes.some(r => r.agency_id && upper(r.agency_id) !== agencyId);
     if (multiAgency) routes = routes.filter(r => !r.agency_id || upper(r.agency_id) === agencyId);
     const routeList = routes.filter(r => r.route_id).map(r => {
-      const color = validHex(r.route_color) || fallbackColor(r.route_short_name || r.route_id);
+      const color = validHex(r.route_color) || validHex(((opts.colors || {})[r.route_short_name] || "").replace("#", "")) || fallbackColor(r.route_short_name || r.route_id);
       return {
         id: r.route_id,
         short: r.route_short_name || r.route_long_name || r.route_id,
@@ -183,9 +185,10 @@ message TranslatedString { repeated Translation translation=1; message Translati
     // area that no other agency's trips use.
     const allStops = parseCsv(files.stops || "");
     let usedStops = null; const foreignStops = new Set();
-    if (files.stop_times) {
+    const stopTimes = files.stop_times ? parseCsv(files.stop_times) : [];
+    if (stopTimes.length) {
       const mine = new Set();
-      parseCsv(files.stop_times).forEach(st => {
+      stopTimes.forEach(st => {
         if (trips[st.trip_id]) mine.add(st.stop_id); else if (foreignTrips.has(st.trip_id)) foreignStops.add(st.stop_id);
       });
       if (mine.size) usedStops = mine;
@@ -232,8 +235,201 @@ message TranslatedString { repeated Translation translation=1; message Translati
     });
 
     const feedInfo = parseCsv(files.feed_info || "")[0] || null;
-    return { agency: agencyId, timezone: tz, routes: routeList, trips, stops, routeShapes,
+    const out = { agency: agencyId, timezone: tz, routes: routeList, trips, stops, routeShapes,
       feedVersion: feedInfo && (feedInfo.feed_version || feedInfo.feed_end_date) || "" };
+    if (opts.schedule && stopTimes.length) out.schedule = buildSchedule(stopTimes, trips, stops, shapePts, files);
+    return out;
+  }
+
+  /* ---------------- timetable (trains) ---------------- */
+  /** "25:10:00" → seconds after the service day's noon-minus-12h. */
+  function gtfsTime(t) {
+    const m = /^\s*(\d+):(\d{2})(?::(\d{2}))?\s*$/.exec(t || ""); return m ? +m[1] * 3600 + +m[2] * 60 + +(m[3] || 0) : null;
+  }
+  const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+  /**
+   * Compact timetable: trips with [stopId, arr, dep] rows, service calendars and the shapes they run on.
+   * Kept JSON-serialisable so it can be cached.
+   */
+  function buildSchedule(stopTimes, trips, stops, shapePts, files) {
+    const rows = {};
+    stopTimes.forEach(r => {
+      if (!trips[r.trip_id] || !stops[r.stop_id]) return;
+      const arr = gtfsTime(r.arrival_time), dep = gtfsTime(r.departure_time);
+      if (arr == null && dep == null) return;
+      (rows[r.trip_id] = rows[r.trip_id] || []).push([num(r.stop_sequence) || 0, r.stop_id, arr == null ? dep : arr, dep == null ? arr : dep]);
+    });
+    const serviceOf = {};
+    parseCsv(files.trips || "").forEach(t => { if (trips[t.trip_id]) serviceOf[t.trip_id] = t.service_id; });
+    const schedTrips = [];
+    Object.keys(rows).forEach(id => {
+      const r = rows[id].sort((a, b) => a[0] - b[0]).map(x => [x[1], x[2], x[3]]);
+      if (r.length < 2) return;
+      const t = trips[id];
+      schedTrips.push({ id, route: t.route, head: t.head || stops[r[r.length - 1][0]].name, shape: t.shape || "", svc: serviceOf[id] || "", stops: r });
+    });
+    const services = {};
+    parseCsv(files.calendar || "").forEach(c => {
+      services[c.service_id] = { days: DAYS.map(d => c[d] === "1"), start: c.start_date || "", end: c.end_date || "" };
+    });
+    const exceptions = {};
+    parseCsv(files.calendar_dates || "").forEach(c => { (exceptions[c.date] = exceptions[c.date] || {})[c.service_id] = num(c.exception_type); });
+    const shapes = {};
+    new Set(schedTrips.map(t => t.shape)).forEach(sid => {
+      if (sid && shapePts[sid]) shapes[sid] = shapePts[sid].slice().sort((a, b) => a[0] - b[0]).map(p => [Math.round(p[1] * 1e5) / 1e5, Math.round(p[2] * 1e5) / 1e5]);
+    });
+    return { trips: schedTrips, services, exceptions, shapes };
+  }
+
+  /** Date/time in the agency timezone: {ymd:"20261011", dow:0..6 (Mon=0), sec: seconds since midnight}. */
+  function localParts(tz, date) {
+    const d = date || new Date();
+    try {
+      const p = {}; new Intl.DateTimeFormat("en-GB", { timeZone: tz || "Asia/Colombo", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short", hourCycle: "h23" }).formatToParts(d).forEach(x => { p[x.type] = x.value; });
+      return { ymd: p.year + p.month + p.day, dow: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(p.weekday), sec: +p.hour * 3600 + +p.minute * 60 + +p.second };
+    } catch (e) {
+      return { ymd: "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0"), dow: (d.getDay() + 6) % 7, sec: d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() };
+    }
+  }
+  function serviceRuns(sched, svc, ymd, dow) {
+    const ex = sched.exceptions[ymd] && sched.exceptions[ymd][svc];
+    if (ex === 1) return true; if (ex === 2) return false;
+    const c = sched.services[svc]; if (!c) return !Object.keys(sched.services).length; // no calendar → assume daily
+    return !!c.days[dow] && (!c.start || ymd >= c.start) && (!c.end || ymd <= c.end);
+  }
+  /** Service days to consider: today, and yesterday for trips running past midnight (times ≥ 24:00). */
+  function serviceDays(tz, nowSec) {
+    const today = localParts(tz, new Date(nowSec * 1000));
+    const y = localParts(tz, new Date((nowSec - 86400) * 1000));
+    return [{ ymd: today.ymd, dow: today.dow, t: today.sec }, { ymd: y.ymd, dow: y.dow, t: today.sec + 86400 }];
+  }
+
+  /* Shape geometry: cumulative distances and where each stop sits along the line. */
+  const shapeCache = new WeakMap();
+  function shapeGeo(sched, sid) {
+    const pts = sched.shapes[sid]; if (!pts || pts.length < 2) return null;
+    let g = shapeCache.get(pts); if (g) return g;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distanceM(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+    g = { pts, cum, at: {} }; shapeCache.set(pts, g); return g;
+  }
+  function stopOnShape(g, stop) {
+    if (g.at[stop.id] !== undefined) return g.at[stop.id];
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < g.pts.length; i++) { const d = distanceM(stop.lat, stop.lon, g.pts[i][0], g.pts[i][1]); if (d < bd) { bd = d; best = i; } }
+    return (g.at[stop.id] = bd < 2500 ? g.cum[best] : null);
+  }
+  function pointAt(g, dist) {
+    const c = g.cum; dist = Math.max(0, Math.min(c[c.length - 1], dist));
+    let lo = 0, hi = c.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (c[mid] <= dist) lo = mid; else hi = mid; }
+    const seg = c[hi] - c[lo] || 1, k = (dist - c[lo]) / seg;
+    return [g.pts[lo][0] + (g.pts[hi][0] - g.pts[lo][0]) * k, g.pts[lo][1] + (g.pts[hi][1] - g.pts[lo][1]) * k];
+  }
+  /** Position between two stops at fraction k, following the track shape when it fits. */
+  function between(sched, trip, stops, a, b, k) {
+    const A = stops[a[0]], B = stops[b[0]];
+    const g = trip.shape && shapeGeo(sched, trip.shape);
+    if (g) {
+      const da = stopOnShape(g, A), db = stopOnShape(g, B);
+      if (da != null && db != null && da !== db) {
+        const p = pointAt(g, da + (db - da) * k), q = pointAt(g, da + (db - da) * Math.min(1, k + 0.02));
+        const brg = distanceM(p[0], p[1], q[0], q[1]) > 1 ? bearingDeg(p[0], p[1], q[0], q[1]) : bearingDeg(A.lat, A.lon, B.lat, B.lon);
+        return { lat: p[0], lon: p[1], bearing: brg };
+      }
+    }
+    return { lat: A.lat + (B.lat - A.lat) * k, lon: A.lon + (B.lon - A.lon) * k, bearing: bearingDeg(A.lat, A.lon, B.lat, B.lon) };
+  }
+
+  /**
+   * Where a scheduled trip is at `now`, shifted by `delay` seconds.
+   * Returns null if the trip isn't running. Includes the upcoming stops with their expected epoch times.
+   */
+  function tripState(sched, trip, stops, t, now, delay) {
+    const st = trip.stops; const s = t - (delay || 0);
+    if (s < st[0][2] || s > st[st.length - 1][1]) return null;
+    let pos = null, nextIdx = st.length - 1, atStop = null;
+    for (let i = 0; i < st.length; i++) {
+      if (s >= st[i][1] && s <= st[i][2]) { const S = stops[st[i][0]]; atStop = st[i][0]; nextIdx = Math.min(i + 1, st.length - 1);
+        const n = stops[st[nextIdx][0]]; pos = { lat: S.lat, lon: S.lon, bearing: n && n !== S ? bearingDeg(S.lat, S.lon, n.lat, n.lon) : null }; break; }
+      if (i < st.length - 1 && s > st[i][2] && s < st[i + 1][1]) {
+        const k = (s - st[i][2]) / ((st[i + 1][1] - st[i][2]) || 1);
+        pos = between(sched, trip, stops, st[i], st[i + 1], k); nextIdx = i + 1; break;
+      }
+    }
+    if (!pos) return null;
+    const upcoming = [];
+    for (let i = nextIdx; i < st.length; i++) {
+      if (st[i][0] === atStop) continue;
+      upcoming.push({ stopId: st[i][0], time: now + (st[i][1] - s) });
+    }
+    return Object.assign(pos, { atStop, upcoming, origin: st[0][0], dest: st[st.length - 1][0],
+      startTime: now + (st[0][2] - s) });
+  }
+
+  /**
+   * Trains (or any scheduled vehicles) that should be on the line right now according to the timetable.
+   * opts: {now, tz, delays: Map tripId→sec, cancelled: Set tripIds, skip: Set tripIds (have live GPS)}
+   */
+  function scheduledVehicles(st, opts) {
+    const sched = st && st.schedule; if (!sched) return [];
+    opts = opts || {};
+    const now = opts.now || Date.now() / 1000;
+    const days = serviceDays(opts.tz || st.timezone, now);
+    const out = [];
+    for (const trip of sched.trips) {
+      if (opts.skip && opts.skip.has(trip.id)) continue;
+      if (opts.cancelled && opts.cancelled.has(trip.id)) continue;
+      const delay = opts.delays && opts.delays.has(trip.id) ? opts.delays.get(trip.id) : null;
+      for (const d of days) {
+        if (!serviceRuns(sched, trip.svc, d.ymd, d.dow)) continue;
+        const state = tripState(sched, trip, st.stops, d.t, now, delay);
+        if (!state) continue;
+        out.push(Object.assign({ id: trip.id, label: trip.head, routeId: trip.route, tripId: trip.id, headsign: trip.head,
+          scheduled: true, delay, ts: null, stale: false, speedKmh: null }, state));
+        break;
+      }
+    }
+    return out;
+  }
+  /** Upcoming stops for a trip (used to enrich live GPS trains with timetable info). */
+  function tripUpcoming(st, tripId, opts) {
+    const sched = st && st.schedule; if (!sched) return null;
+    const trip = sched.trips.find(t => t.id === tripId); if (!trip) return null;
+    opts = opts || {}; const now = opts.now || Date.now() / 1000;
+    for (const d of serviceDays(opts.tz || st.timezone, now)) {
+      const s = tripState(sched, trip, st.stops, d.t, now, opts.delay);
+      if (s) return Object.assign(s, { headsign: trip.head });
+    }
+    return { headsign: trip.head, upcoming: [] };
+  }
+
+  /**
+   * Departure board for a station from the timetable, with live delays/cancellations applied.
+   * Returns [{tripId, routeId, headsign, time (expected epoch), planned (epoch), delay, cancelled, arrivalOnly}]
+   */
+  function departures(st, stopId, opts) {
+    const sched = st && st.schedule; if (!sched) return [];
+    opts = opts || {};
+    const now = opts.now || Date.now() / 1000, horizon = opts.horizonSec || 3 * 3600;
+    const days = serviceDays(opts.tz || st.timezone, now).concat([]);
+    const out = [];
+    for (const trip of sched.trips) {
+      const i = trip.stops.findIndex(r => r[0] === stopId); if (i < 0) continue;
+      const row = trip.stops[i]; const last = i === trip.stops.length - 1;
+      const delay = opts.delays && opts.delays.has(trip.id) ? opts.delays.get(trip.id) : null;
+      for (const d of days) {
+        if (!serviceRuns(sched, trip.svc, d.ymd, d.dow)) continue;
+        const planned = now + ((last ? row[1] : row[2]) - d.t);
+        const time = planned + (delay || 0);
+        if (time < now - 60 || planned > now + horizon) continue;
+        out.push({ tripId: trip.id, routeId: trip.route, headsign: trip.head, time, planned, delay,
+          cancelled: !!(opts.cancelled && opts.cancelled.has(trip.id)), arrivalOnly: last });
+      }
+    }
+    return out.sort((a, b) => a.time - b.time).slice(0, opts.limit || 8);
   }
 
   /** Lookup indexes for resolving realtime references against the static model. */
@@ -269,7 +465,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
 
   function looksLikeAgency(trip, agency) {
     const a = upper(agency || "LMT");
-    return upper(trip.trip_id).startsWith(a + "_") || /^CM\d{1,3}[A-Z]?$/.test(upper(trip.route_id));
+    return upper(trip.trip_id).startsWith(a + "_") || (a === "LMT" && /^CM\d{1,3}[A-Z]?$/.test(upper(trip.route_id)));
   }
 
   function nearestStop(idx, lat, lon) {
@@ -364,7 +560,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
     opts = opts || {};
     const now = opts.now || Date.now() / 1000;
     const hasRoutes = idx.byId.size > 0;
-    const byStop = new Map(), byVehicle = new Map(); let count = 0;
+    const byStop = new Map(), byVehicle = new Map(), delays = new Map(), cancelledTrips = new Set(); let count = 0;
     for (const e of (feed && feed.entity) || []) {
       const tu = e && e.trip_update; if (!tu || e.is_deleted) continue;
       const trip = tu.trip || {};
@@ -373,6 +569,15 @@ message TranslatedString { repeated Translation translation=1; message Translati
       count++;
       const cancelled = trip.schedule_relationship === "CANCELED" || trip.schedule_relationship === "DELETED";
       const vid = norm(tu.vehicle && (tu.vehicle.id || tu.vehicle.license_plate || tu.vehicle.label));
+      if (trip.trip_id && cancelled) cancelledTrips.add(trip.trip_id);
+      // Current delay of the trip: first upcoming stop that reports one, else the trip-level delay.
+      let tripDelay = null;
+      for (const su of tu.stop_time_update || []) {
+        const ev = su.arrival || su.departure || {}; const t = toSeconds(ev.time);
+        if (ev.delay != null && (!t || t >= now - 60)) { tripDelay = ev.delay; break; }
+      }
+      if (tripDelay == null && tu.delay != null) tripDelay = tu.delay;
+      if (trip.trip_id && tripDelay != null) delays.set(trip.trip_id, tripDelay);
       const list = [];
       for (const su of tu.stop_time_update || []) {
         const ev = su.arrival || su.departure || {};
@@ -392,7 +597,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
     }
     byStop.forEach(a => a.sort((x, y) => x.time - y.time));
     byVehicle.forEach(a => a.sort((x, y) => x.time - y.time));
-    return { byStop, byVehicle, count, headerTs: toSeconds(feed && feed.header && feed.header.timestamp) };
+    return { byStop, byVehicle, delays, cancelled: cancelledTrips, count, headerTs: toSeconds(feed && feed.header && feed.header.timestamp) };
   }
 
   /* ---------------- realtime: alerts ---------------- */
@@ -451,8 +656,8 @@ message TranslatedString { repeated Translation translation=1; message Translati
     } catch (e) { const x = d || new Date(); return x.getHours() * 60 + x.getMinutes(); }
   }
 
-  return { GTFS_RT_PROTO, SERVICE_AREA, OCCUPANCY, STOP_STATUS, CAUSE, EFFECT,
-    parseCsv, buildStatic, indexStatic, resolveRoute, guessRouteCode, nearestStop,
+  return { GTFS_RT_PROTO, SERVICE_AREA, SRI_LANKA, OCCUPANCY, STOP_STATUS, CAUSE, EFFECT,
+    parseCsv, buildStatic, indexStatic, gtfsTime, localParts, scheduledVehicles, tripUpcoming, departures, resolveRoute, guessRouteCode, nearestStop,
     processVehicles, jsonListToFeed, processTripUpdates, processAlerts,
     distanceM, bearingDeg, inArea, toSeconds, translate, contrastText, minutesUntil, ago, localMinutes };
 });

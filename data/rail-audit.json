@@ -1,0 +1,47 @@
+{
+ "generated": "2026-10-12T02:41:47.447Z",
+ "offTrack": [
+  {
+   "id": "ST_UDHAMULLA",
+   "name": "Udhamulla",
+   "metres": 2136
+  },
+  {
+   "id": "ST_PATHANPHA",
+   "name": "Pathanpha",
+   "metres": 1562
+  },
+  {
+   "id": "ST_YAPAHUWA",
+   "name": "Yapahuwa",
+   "metres": 1189
+  },
+  {
+   "id": "ST_MURUNKAN",
+   "name": "Murunkan",
+   "metres": 933
+  },
+  {
+   "id": "ST_YATIRAWANA",
+   "name": "Yatirawana",
+   "metres": 681
+  },
+  {
+   "id": "ST_PILADUWA",
+   "name": "Piladuwa",
+   "metres": 576
+  },
+  {
+   "id": "ST_BUTHGAMUWA",
+   "name": "Buthgamuwa",
+   "metres": 511
+  },
+  {
+   "id": "ST_YATAWARA",
+   "name": "Yatawara",
+   "metres": 492
+  }
+ ],
+ "routedPairs": 650,
+ "failed": []
+}

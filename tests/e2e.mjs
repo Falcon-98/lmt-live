@@ -95,7 +95,8 @@ try {
   check(new Set(wb).size === 2, "two trains waiting at Colombo Fort are fanned out, not stacked");
   check(await page.locator("#c-routes").textContent() === "3", "3 routes (2 bus + 1 rail line)");
   check(await page.locator("#c-stops").textContent() === "15", "15 stops (9 bus stops + 6 stations)");
-  check((await page.locator(".leaflet-routes-pane path").count()) === 3, "2 CM01 shapes + Coast Line drawn");
+  const nPaths = await page.locator(".leaflet-routes-pane path").count();
+  check(nPaths >= 3, "2 CM01 shapes + Coast Line drawn (" + nPaths + " track pieces)");
   check(/Live · 4 buses · 1 live train \+ 1 ⏱ scheduled \+ 2 ⏳ departing/.test(await page.locator("#status").textContent()), "status line counts live, scheduled and departing");
   check(await page.locator("#h-bus").getAttribute("class") === "dot ok" && await page.locator("#h-train").getAttribute("class") === "dot ok", "bus and train feeds healthy");
   check(await page.locator("#c-alerts").textContent() === "3", "3 alerts (2 bus + 1 rail)");

@@ -24,11 +24,39 @@ const node = new Map(); osm.forEach(e => { if (e.type === "node") node.set(e.id,
 const adj = new Map();
 const link = (a, b) => { if (!node.has(a) || !node.has(b) || a === b) return; const d = C.distanceM(...node.get(a), ...node.get(b));
   (adj.get(a) || adj.set(a, []).get(a)).push([b, d]); (adj.get(b) || adj.set(b, []).get(b)).push([a, d]); };
-osm.forEach(e => { if (e.type === "way") for (let i = 1; i < e.nodes.length; i++) link(e.nodes[i - 1], e.nodes[i]); });
+const wayOf = new Map();
+osm.forEach(e => { if (e.type === "way") { for (let i = 1; i < e.nodes.length; i++) link(e.nodes[i - 1], e.nodes[i]); e.nodes.forEach(n => wayOf.set(n, e.id)); } });
 const ids = [...adj.keys()];
 // spatial grid for nearest-node lookup
 const cell = (lat, lon) => Math.floor(lat * 50) + ":" + Math.floor(lon * 50);
 const grid = new Map(); ids.forEach(id => { const [la, lo] = node.get(id); const k = cell(la, lo); (grid.get(k) || grid.set(k, []).get(k)).push(id); });
+// OSM maps double track as separate lines joined by crossovers tagged as service track (excluded),
+// and has small gaps: bridge nodes of different ways within 25 m, slightly penalised.
+{
+  let bridges = 0;
+  ids.forEach(a => { const [la, lo] = node.get(a), cy = Math.floor(la * 50), cx = Math.floor(lo * 50);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) (grid.get((cy + dy) + ":" + (cx + dx)) || []).forEach(b => {
+      if (b <= a || wayOf.get(a) === wayOf.get(b)) return; const d = C.distanceM(la, lo, ...node.get(b)); if (d > 25) return;
+      adj.get(a).push([b, d * 1.5 + 5]); adj.get(b).push([a, d * 1.5 + 5]); bridges++; }); });
+  console.log("bridged", bridges, "near-touching node pairs between separate track lines");
+}
+// Small track pieces left disconnected by mapping gaps (e.g. 127 m before Batticaloa terminus):
+// join each to the main network at its closest point if that is under 300 m.
+{
+  const comp = new Map(); let n = 0;
+  ids.forEach(s => { if (comp.has(s)) return; const q = [s]; comp.set(s, n); while (q.length) { const u = q.pop(); for (const [v] of adj.get(u)) if (!comp.has(v)) { comp.set(v, n); q.push(v); } } n++; });
+  const size = new Map(); comp.forEach(c => size.set(c, (size.get(c) || 0) + 1));
+  const main = [...size.entries()].sort((x, y) => y[1] - x[1])[0][0];
+  let joined = 0;
+  [...size.keys()].filter(c => c !== main && size.get(c) < 2000).forEach(c => {
+    let best = null;
+    ids.forEach(a => { if (comp.get(a) !== c) return; const [la, lo] = node.get(a), cy = Math.floor(la * 50), cx = Math.floor(lo * 50);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) (grid.get((cy + dy) + ":" + (cx + dx)) || []).forEach(b => {
+        if (comp.get(b) !== main) return; const d = C.distanceM(la, lo, ...node.get(b)); if (d <= 300 && (!best || d < best.d)) best = { a, b, d }; }); });
+    if (best) { adj.get(best.a).push([best.b, best.d * 2]); adj.get(best.b).push([best.a, best.d * 2]); joined++; }
+  });
+  console.log("track pieces:", n, "| small pieces joined to the main network across gaps < 300 m:", joined);
+}
 function nearestNode(lat, lon, maxM = 5000) {
   let best = null, bd = Infinity; const r = Math.ceil(maxM / 2200) + 1, cy = Math.floor(lat * 50), cx = Math.floor(lon * 50);
   for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) (grid.get((cy + dy) + ":" + (cx + dx)) || []).forEach(id => {
@@ -69,6 +97,25 @@ Object.values(byTrip).forEach(rs => rs.sort((a, b) => a.stop_sequence - b.stop_s
 const snapOf = {}; const offTrack = [];
 Object.values(stops).forEach(s => { const n = nearestNode(s.lat, s.lon, 20000); snapOf[s.id] = n; if (!n || n.d > 400) offTrack.push({ s, d: n ? Math.round(n.d) : null }); });
 
+/* ---- stations off the track: move them onto the track between their neighbours,
+   at the track point nearest the published position ---- */
+const moved = [];
+const nbrs = {}; Object.values(byTrip).forEach(rs => rs.forEach((r, i) => { const s2 = (nbrs[r.stop_id] = nbrs[r.stop_id] || []);
+  if (i && i < rs.length - 1) s2.push([rs[i - 1].stop_id, rs[i + 1].stop_id]); }));
+for (let pass = 0; pass < 3; pass++) offTrack.forEach(({ s, d }) => {
+  if (d == null || d > 5000 || moved.some(m => m.id === s.id)) return;
+  let best = null;
+  for (const [a, b] of nbrs[s.id] || []) {
+    const sa = snapOf[a], sb = snapOf[b]; if (!sa || !sb || sa.d > 400 || sb.d > 400) continue;
+    const straight = C.distanceM(stops[a].lat, stops[a].lon, stops[b].lat, stops[b].lon);
+    const r = route(sa.id, sb.id, Math.max(4 * straight, straight + 20000)); if (!r) continue;
+    r.nodes.forEach(id => { const p = node.get(id); const dd = C.distanceM(s.lat, s.lon, p[0], p[1]); if (!best || dd < best.d) best = { d: dd, id, p }; });
+    if (best) break;
+  }
+  if (best) { moved.push({ id: s.id, name: s.name, from: [s.lat, s.lon], to: best.p, m: Math.round(best.d) });
+    s.lat = best.p[0]; s.lon = best.p[1]; snapOf[s.id] = { id: best.id, d: 0 }; }
+});
+
 /* ---- route every consecutive pair ---- */
 const pairs = new Map(); // "A|B" (A<B) → {m, pts}
 const failed = [];
@@ -86,6 +133,8 @@ Object.values(byTrip).forEach(rs => rs.forEach((r, i) => {
 }));
 
 /* ---- report ---- */
+console.log("Stations moved onto the track between their neighbours:", moved.length);
+moved.forEach(m => console.log("  ", m.name.padEnd(22), "moved", m.m, "m"));
 const npts = [...pairs.values()].reduce((n, p) => n + p.pts.length, 0);
 console.log("OSM rail nodes:", ids.length, "| SLR stations:", Object.keys(stops).length);
 console.log("Stations more than 400 m from any running track:", offTrack.length);
@@ -105,4 +154,10 @@ fs.writeFileSync(new URL("../assets/rail-geometry.js", import.meta.url),
   "})(typeof self !== \"undefined\" ? self : this);\n");
 fs.writeFileSync(new URL("../data/rail-audit.json", import.meta.url), JSON.stringify({ generated: new Date().toISOString(),
   offTrack: offTrack.map(o => ({ id: o.s.id, name: o.s.name, metres: o.d })), routedPairs: pairs.size, failed }, null, 1) + "\n");
+if (moved.length) {
+  const fx = Object.assign({}, FIX); moved.forEach(m => { fx[m.id] = [+m.to[0].toFixed(6), +m.to[1].toFixed(6)]; });
+  const file = new URL("../assets/station-fixes.js", import.meta.url), src = fs.readFileSync(file, "utf8");
+  fs.writeFileSync(file, src.replace(/var FIXES = [\s\S]*?;\n  if/, "var FIXES = " + JSON.stringify(fx, null, 0).replace(/\],"/g, '],\n  "') + ";\n  if"));
+  console.log("updated assets/station-fixes.js with", moved.length, "on-track positions");
+}
 console.log("wrote assets/rail-geometry.js", Math.round(fs.statSync(new URL("../assets/rail-geometry.js", import.meta.url)).size / 1024), "KB");

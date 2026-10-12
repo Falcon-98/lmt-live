@@ -245,3 +245,18 @@ test("trains follow attached track geometry between stations, and lines are rebu
   }
   assert.ok(maxLon > 79.87, "train swung inland along the track instead of the straight coastal line");
 });
+
+test("live buses without route_id are accepted by registration plate (feed format of 2026-10-12)", () => {
+  const plate = /^(?:[A-Z]{2}-)?[A-Z]{2,3}-\d{3,4}$|^[A-Z]{2,3}\d{4}$/;
+  const strict = C.processVehicles(decode(F.unroutedFeed(NOW)), idx, { now: NOW, maxAgeSec: 1800 });
+  assert.equal(strict.vehicles.length, 0, "without a plate pattern they look like another agency's vehicles");
+  const r = C.processVehicles(decode(F.unroutedFeed(NOW)), idx, { now: NOW, maxAgeSec: 1800, platePattern: plate, agency: "LMT" });
+  assert.deepEqual(r.vehicles.map(v => v.id).sort(), ["WP-NE-6506", "WP-NE-6510", "WP-NE-6514"]);
+  assert.equal(r.vehicles.find(v => v.id === "WP-NE-6510").stale, true);
+  assert.equal(r.stats.unrouted, 3);
+});
+
+test("routeCandidates finds the route whose line passes a bus", () => {
+  assert.deepEqual(C.routeCandidates(st, 6.8722, 79.8888, 120).map(c => C.indexStatic(st).byId.get(c.routeId).short), ["CM01"]);
+  assert.deepEqual(C.routeCandidates(st, 6.9600, 79.9800, 120), []);
+});

@@ -19,7 +19,7 @@
     // Optional second API base (e.g. your CORS proxy, see proxy/cloudflare-worker.js). Tried when the first fails.
     fallbackApi: "",
     refreshMs: { vehicles: 10000, tripUpdates: 30000, alerts: 60000, estimates: 5000 },
-    maxVehicleAgeSec: 900,   // GPS positions older than this are dropped (the feed keeps expiring records)
+    maxVehicleAgeSec: 1800,  // GPS positions older than this are dropped (the producer keeps buses ~45 min after their last ticket)
     staleVehicleSec: 180,    // older than this are shown faded as "signal delayed"
     staticCacheHours: 24,
     trains: true,
@@ -30,6 +30,8 @@
         // LMT now publishes trips + stop_times: when the GPS feed is empty, buses are placed from the timetable (labelled ⏱).
         schedule: true,
         speedUnit: "kmh", // the LMT producer publishes km/h (GTFS-RT says m/s); ?speed=ms switches
+        // Positions often arrive without route_id (opaque trip ids): accept LMT buses by their plate, then infer the route.
+        platePattern: /^(?:[A-Z]{2}-)?[A-Z]{2,3}-\d{3,4}$|^[A-Z]{2,3}\d{4}$/,
         staticPaths: ["/gtfs/download?agency=LMT"],
         // Mobility Database mirrors of feed mdb-3490, tried if the producer download fails.
         staticMirrors: [
@@ -340,8 +342,9 @@
       catch (e2) { vehicleFailure(sys, e); throw e; }
     }
     const res = C.processVehicles(feed, sys.idx, { maxAgeSec: CFG.maxVehicleAgeSec, staleSec: CFG.staleVehicleSec,
-      speedUnit: sys.speedUnit, area: sys.area, agency: sys.id });
+      speedUnit: sys.speedUnit, area: sys.area, agency: sys.id, platePattern: sys.platePattern });
     sys.lastOk = nowS();
+    res.vehicles.forEach(v => { if (!v.routeId && !v.routeCode && sys.mode === "bus") inferRoute(sys, v); });
     const seen = new Set();
     res.vehicles.forEach(v => {
       seen.add(v.id);
@@ -374,6 +377,23 @@
     if (sys.schedule) updateEstimates(sys, true);
     reconcile();
   }
+  /**
+   * Work out a GPS bus's route from where it drives: routes whose line is within 120 m, narrowed
+   * down across updates (a bus on a stretch shared by CM01 and CM03 resolves once it turns off it).
+   */
+  const routeGuess = new Map();
+  function inferRoute(sys, v) {
+    if (!sys.static) return;
+    const cands = new Set(C.routeCandidates(sys.static, v.lat, v.lon, 120).map(c => c.routeId));
+    const key = sys.id + ":" + v.id, prev = routeGuess.get(key);
+    let set = cands;
+    if (prev && prev.size) { const inter = new Set([...cands].filter(r => prev.has(r))); set = inter.size ? inter : cands.size ? cands : prev; }
+    routeGuess.set(key, set);
+    const codes = [...set].map(r => (sys.idx.byId.get(r) || {}).short).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (set.size === 1) { v.routeId = [...set][0]; v.routeCode = codes[0]; v.inferred = true; }
+    else if (set.size > 1) { v.routeCode = codes.length > 2 ? codes.slice(0, 2).join("/") + "…" : codes.join("/"); v.routeOptions = codes; v.inferred = true; }
+    else v.routeCode = "LMT";
+  }
   function vehicleFailure(sys, e) {
     if (sys.mode === "train") {
       // Trains keep running from the timetable; only report it.
@@ -395,6 +415,8 @@
     const skip = new Set(live.map(v => v.tripId).filter(Boolean));
     // Bus trip ids in the GPS feed are synthetic, so a route with live buses shows only those.
     const skipRoutes = sys.mode === "bus" ? new Set(live.map(v => v.routeId).filter(Boolean)) : null;
+    // With real GPS buses on the map, timetable positions would only mix in guesses: show the real ones only.
+    if (sys.mode === "bus" && live.length >= 3) { sys.est = []; if (!quiet) reconcile(); return; }
     sys.est = C.scheduledVehicles(sys.static, { delays: sys.trip.delays, cancelled: sys.trip.cancelled, skip, skipRoutes,
       preDepartSec: (sys.preDepartMin || 0) * 60 });
     if (!quiet) reconcile();
@@ -562,6 +584,8 @@
     if ((train || v.scheduled) && v.dest) facts.push(["To", esc(stopName(sys, v.dest))]);
     if (train && v.delay != null) facts.push(["Running", delayChip(v.delay) + " " + esc(delayText(v.delay))]);
     if (!train && !v.scheduled) facts.push(["Bus", "<b>" + esc(v.label) + "</b>"]);
+    if (v.inferred) facts.push(["Route", v.routeOptions ? "one of " + esc(v.routeOptions.join(", ")) + ' <em class="st">shared road — narrows as it moves</em>' : esc(v.routeCode) + ' <em class="st">worked out from its position</em>']);
+    else if (!v.routeId && !v.scheduled && !train) facts.push(["Route", '<span class="muted">not reported by the feed</span>']);
     if (v.speedKmh != null) facts.push(["Speed", Math.round(v.speedKmh) + " km/h"]);
     const occ = v.occupancy && C.OCCUPANCY[v.occupancy];
     if (occ) facts.push(["Crowding", occ[1] + (v.occupancyPct != null ? " (" + v.occupancyPct + "%)" : "")]);

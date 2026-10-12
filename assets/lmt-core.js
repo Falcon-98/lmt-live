@@ -539,6 +539,31 @@ message TranslatedString { repeated Translation translation=1; message Translati
     return upper(trip.trip_id).startsWith(a + "_") || (a === "LMT" && /^CM\d{1,3}[A-Z]?$/.test(upper(trip.route_id)));
   }
 
+  /**
+   * Routes whose drawn line passes within maxM metres of a point — used to work out which route
+   * a GPS bus is on when the feed doesn't say. Returns [{routeId, d}] sorted by distance.
+   */
+  function routeCandidates(st, lat, lon, maxM) {
+    maxM = maxM || 120;
+    const kx = Math.cos(lat * Math.PI / 180) * 111320, ky = 110540, out = [];
+    const shapes = (st && st.routeShapes) || {};
+    const pad = maxM / 100000;
+    Object.keys(shapes).forEach(rid => {
+      let best = Infinity;
+      for (const line of shapes[rid]) {
+        for (let i = 1; i < line.length; i++) {
+          const a = line[i - 1], b = line[i];
+          if ((lat < Math.min(a[0], b[0]) - pad) || (lat > Math.max(a[0], b[0]) + pad) || (lon < Math.min(a[1], b[1]) - pad) || (lon > Math.max(a[1], b[1]) + pad)) continue;
+          const ax = (a[1] - lon) * kx, ay = (a[0] - lat) * ky, bx = (b[1] - lon) * kx, by = (b[0] - lat) * ky;
+          const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L));
+          const d = Math.hypot(ax + t * dx, ay + t * dy); if (d < best) best = d;
+        }
+      }
+      if (best <= maxM) out.push({ routeId: rid, d: best });
+    });
+    return out.sort((x, y) => x.d - y.d);
+  }
+
   function nearestStop(idx, lat, lon) {
     let best = null, bd = Infinity;
     for (const s of idx.platforms) { const d = distanceM(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = s; } }
@@ -573,7 +598,13 @@ message TranslatedString { repeated Translation translation=1; message Translati
       const route = resolveRoute(idx, trip.route_id, trip.trip_id);
       // Routes the producer runs but hasn't put in the schedule yet still count as LMT
       // when they carry an LMT route code (CM03) or an LMT synthetic trip id.
-      if (!route && requireKnown && !looksLikeAgency(trip, opts.agency)) { stats.foreign++; continue; }
+      // The producer sometimes omits route_id and uses opaque trip ids; a vehicle can still be accepted
+      // by its registration plate (e.g. WP-NE-6506) when the caller supplies a plate pattern.
+      const vplate = norm(vd.license_plate) || norm(vd.label) || norm(vd.id);
+      const byPlate = !route && opts.platePattern && opts.platePattern.test(upper(vplate)) &&
+        !/^(SIM|TEST|DEV|SUN|DEMO)[-_]/.test(upper(vplate)); // simulator/test devices (the producer rejects these too)
+      if (!route && requireKnown && !byPlate && !looksLikeAgency(trip, opts.agency)) { stats.foreign++; continue; }
+      if (byPlate) stats.unrouted = (stats.unrouted || 0) + 1;
       const id = norm(vd.id) || norm(vd.license_plate) || norm(vd.label) || norm(e.id);
       if (!id) { stats.invalid++; continue; }
       const prev = out.get(id);
@@ -731,7 +762,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
   }
 
   return { GTFS_RT_PROTO, SERVICE_AREA, SRI_LANKA, OCCUPANCY, STOP_STATUS, CAUSE, EFFECT,
-    parseCsv, buildStatic, indexStatic, gtfsTime, decodePolyline, attachRail, localParts, scheduledVehicles, tripUpcoming, departures, resolveRoute, guessRouteCode, nearestStop,
+    parseCsv, buildStatic, indexStatic, gtfsTime, routeCandidates, decodePolyline, attachRail, localParts, scheduledVehicles, tripUpcoming, departures, resolveRoute, guessRouteCode, nearestStop,
     processVehicles, jsonListToFeed, processTripUpdates, processAlerts,
     distanceM, bearingDeg, inArea, toSeconds, translate, contrastText, minutesUntil, ago, localMinutes };
 });

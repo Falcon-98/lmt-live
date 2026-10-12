@@ -1,0 +1,10 @@
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type,route_url,route_color,route_text_color
+COAST_LINE,SLR,Coast,Coast Line (Colombo - Matara),,2,,,FFFFFF
+MAIN_LINE,SLR,Main,Main Line (Colombo - Badulla),,2,,,FFFFFF
+PUTTALAM_LINE,SLR,Puttalam,Puttalam Line (Colombo - Puttalam),,2,,,FFFFFF
+NORTHERN_LINE,SLR,Northern,Northern Line (Colombo - Jaffna),,2,,,FFFFFF
+KELANI_VALLEY_LINE,SLR,Kelani,Kelani Valley Line (Colombo - Avissawella),,2,,,FFFFFF
+BATTICALOA_LINE,SLR,Batticaloa,Batticaloa Line (Colombo - Batticaloa),,2,,,FFFFFF
+TRINCOMALEE_LINE,SLR,Trincomalee,Trincomalee Line (Colombo - Trincomalee),,2,,,FFFFFF
+TALAIMANNAR_LINE,SLR,Talaimannar,Talaimannar Line (Colombo - Thalaimannar),,2,,,FFFFFF
+SUBURBAN_LINE,SLR,Suburban,Suburban / Local Services,,2,,,FFFFFF

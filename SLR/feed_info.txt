@@ -1,0 +1,2 @@
+feed_publisher_name,feed_publisher_url,feed_lang,default_lang,feed_start_date,feed_end_date,feed_version,feed_contact_email,feed_contact_url
+Sri Lanka Railways,http://www.railway.gov.lk,en,en,20260101,20271231,1.0.0,,http://www.railway.gov.lk

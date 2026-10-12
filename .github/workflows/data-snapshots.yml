@@ -1,0 +1,28 @@
+name: data-snapshots
+# Snapshots OSM railway tracks/stations, Colombo bus stops and both GTFS feeds to the
+# `data-snapshots` branch (kept off main) for the station/track audit tools.
+on:
+  workflow_dispatch:
+  push:
+    paths: ["tools/snapshot-data.mjs", ".github/workflows/data-snapshots.yml"]
+permissions:
+  contents: write
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: node tools/snapshot-data.mjs
+      - name: Publish to data-snapshots branch
+        run: |
+          cd snap
+          git init -q -b data-snapshots
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Data snapshot $(date -u +%FT%TZ)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data-snapshots

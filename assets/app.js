@@ -48,6 +48,8 @@
         // The SLR feed has no route colours; these keep each line recognisable.
         // The published SLR stops.txt has many stations in the wrong place; corrected from OpenStreetMap.
         stopFixes: window.LMT_STATION_FIXES || {},
+        // Station-to-station railway tracks, so trains follow the rails and every line is drawn.
+        rail: window.LMT_RAIL_GEOMETRY || null,
         colors: { Main: "#c62828", Coast: "#1565c0", Puttalam: "#2e7d32", Northern: "#6a1b9a", Kelani: "#ef6c00",
           Batticaloa: "#00838f", Trincomalee: "#ad1457", Talaimannar: "#5d4037", Suburban: "#546e7a" },
         serviceHours: [240, 1440]
@@ -233,6 +235,8 @@
   }
 
   function applyStatic(sys, data, source) {
+    // Real track geometry (from OpenStreetMap) for trains and rail lines; not part of the cached data.
+    if (sys.rail) C.attachRail(data, sys.rail);
     sys.static = data; sys.idx = C.indexStatic(data);
     drawRoutes(sys); drawStops(sys);
     const lines = Object.values(data.routeShapes).reduce((n, a) => n + a.length, 0);

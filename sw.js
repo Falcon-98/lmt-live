@@ -1,8 +1,8 @@
 /* LMT Live service worker: installable app + offline shell.
    Network-first for everything so a new deploy is picked up immediately; the cache is only a fallback.
    Live feeds (api.transit.seyone.dev) are never cached. */
-const CACHE = "lmt-live-shell-v2";
-const SHELL = ["./", "index.html", "assets/app.css", "assets/app.js", "assets/lmt-core.js", "assets/station-fixes.js", "assets/icon.svg", "manifest.webmanifest"];
+const CACHE = "lmt-live-shell-v3";
+const SHELL = ["./", "index.html", "assets/app.css", "assets/app.js", "assets/lmt-core.js", "assets/station-fixes.js", "assets/rail-geometry.js", "assets/icon.svg", "manifest.webmanifest"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {})); self.skipWaiting(); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {

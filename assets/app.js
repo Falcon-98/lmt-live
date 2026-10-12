@@ -632,6 +632,10 @@
     const fo = e.target.closest("[data-focus]");
     if (fo) { const k = fo.dataset.focus, i = k.indexOf(":"); setFocus(k); showRoute(sysById(k.slice(0, i)), k.slice(i + 1)); return; }
     if (e.target.closest("[data-unfocus]")) { setFocus(null); return; }
+    if (e.target.closest("[data-showall]")) {
+      S.hiddenRoutes.clear(); store.set("lmt-hidden-routes-v2", []);
+      S.systems.forEach(syncRouteVisibility); setMode("all", false); toast("Showing every route"); return;
+    }
     const b = e.target.closest("[data-follow]"); if (!b) return;
     const key = b.dataset.follow; const prev = S.following; S.following = S.following === key ? null : key;
     const v = S.all.get(key); if (S.following && v) map.setView([v.lat, v.lon], Math.max(map.getZoom(), v.sys.mode === "train" ? 13 : 15));
@@ -716,8 +720,18 @@
       '<span class="s">' + esc(where) + "</span>" + bar + '<span class="m">' + meta + "</span></span>" +
       (train ? delayChip(v.delay) : occ ? '<span class="chip ' + occ[0] + '">' + occ[1] + "</span>" : "") + "</button>";
   }
+  /** Saved filters (hidden routes, Buses/Trains only) persist between visits — say so, so nothing looks "missing". */
+  function filterNotice() {
+    const parts = [];
+    const hidden = [...S.hiddenRoutes].filter(k => { const i = k.indexOf(":"), sys = sysById(k.slice(0, i)); return sys && shown(sys) && sys.idx.byId.has(k.slice(i + 1)); });
+    const hiddenVeh = [...S.all.values()].filter(v => shown(v.sys) && v.routeId && S.hiddenRoutes.has(v.sys.id + ":" + v.routeId)).length;
+    if (hidden.length) parts.push(hidden.length + " route" + (hidden.length > 1 ? "s" : "") + " hidden" + (hiddenVeh ? " (" + hiddenVeh + " vehicle" + (hiddenVeh > 1 ? "s" : "") + ")" : ""));
+    if (S.mode !== "all") parts.push("showing " + (S.mode === "bus" ? "buses" : "trains") + " only");
+    if (!parts.length) return "";
+    return '<div class="focus note">⚠ ' + esc(parts.join(" · ")) + '<button class="btn ghost sm" data-showall>Show all</button></div>';
+  }
   function focusChip() {
-    if (!S.focus) return "";
+    if (!S.focus) return filterNotice();
     const i = S.focus.indexOf(":"), sys = sysById(S.focus.slice(0, i)), r = sys && sys.idx.byId.get(S.focus.slice(i + 1));
     return '<div class="focus">Showing only ' + badge(r) + " " + esc(r ? r.long || r.short : "") + '<button class="ib" data-unfocus title="Show all (Esc)" aria-label="Show all routes">✕</button></div>';
   }

@@ -335,9 +335,60 @@ message TranslatedString { repeated Translation translation=1; message Translati
     const seg = c[hi] - c[lo] || 1, k = (dist - c[lo]) / seg;
     return [g.pts[lo][0] + (g.pts[hi][0] - g.pts[lo][0]) * k, g.pts[lo][1] + (g.pts[hi][1] - g.pts[lo][1]) * k];
   }
-  /** Position between two stops at fraction k, following the track shape when it fits. */
+  /* ---- real track geometry between station pairs (assets/rail-geometry.js, from OpenStreetMap) ---- */
+  function decodePolyline(str) {
+    const out = []; let i = 0, lat = 0, lon = 0;
+    while (i < str.length) {
+      for (const which of [0, 1]) {
+        let shift = 0, res = 0, b;
+        do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        const d = res & 1 ? ~(res >> 1) : res >> 1;
+        if (which === 0) lat += d; else lon += d;
+      }
+      out.push([lat / 1e5, lon / 1e5]);
+    }
+    return out;
+  }
+  /** Track between two stations as {pts, cum} oriented a→b, or null. */
+  function railPair(sched, a, b) {
+    const geo = sched && sched.rail; if (!geo) return null;
+    const key = a < b ? a + "|" + b : b + "|" + a, enc = geo[key]; if (!enc) return null;
+    const cache = sched._railCache || Object.defineProperty(sched, "_railCache", { value: new Map(), enumerable: false })._railCache;
+    const ck = a + ">" + b; if (cache.has(ck)) return cache.get(ck);
+    const pts = decodePolyline(enc); if (a > b) pts.reverse();
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distanceM(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+    const g = { pts, cum }; cache.set(ck, g); return g;
+  }
+  /**
+   * Attach real track geometry to a static model: trains then follow the tracks between stations,
+   * and each route's lines are rebuilt from the station-to-station tracks its trips use.
+   * Not enumerable, so it never ends up in the cached JSON.
+   */
+  function attachRail(st, geo) {
+    if (!st || !st.schedule || !geo) return st;
+    Object.defineProperty(st.schedule, "rail", { value: geo, enumerable: false, configurable: true });
+    const perRoute = {};
+    st.schedule.trips.forEach(t => {
+      const set = perRoute[t.route] || (perRoute[t.route] = new Set());
+      for (let i = 1; i < t.stops.length; i++) { const a = t.stops[i - 1][0], b = t.stops[i][0]; set.add(a < b ? a + "|" + b : b + "|" + a); }
+    });
+    Object.keys(perRoute).forEach(r => {
+      const lines = [...perRoute[r]].filter(k => geo[k]).map(k => decodePolyline(geo[k]).map(p => [p[0], p[1]]));
+      if (lines.length) st.routeShapes[r] = lines;
+    });
+    return st;
+  }
+
+  /** Position between two stops at fraction k, following the real track (or the feed's shape) when available. */
   function between(sched, trip, stops, a, b, k) {
     const A = stops[a[0]], B = stops[b[0]];
+    const rg = railPair(sched, a[0], b[0]);
+    if (rg && rg.cum[rg.cum.length - 1] > 0) {
+      const total = rg.cum[rg.cum.length - 1];
+      const p = pointAt(rg, total * k), q = pointAt(rg, Math.min(total, total * k + 40));
+      const brg = distanceM(p[0], p[1], q[0], q[1]) > 1 ? bearingDeg(p[0], p[1], q[0], q[1]) : bearingDeg(A.lat, A.lon, B.lat, B.lon);
+      return { lat: p[0], lon: p[1], bearing: brg };
+    }
     const g = trip.shape && shapeGeo(sched, trip.shape);
     if (g) {
       const da = stopOnShape(g, A), db = stopOnShape(g, B);
@@ -488,6 +539,31 @@ message TranslatedString { repeated Translation translation=1; message Translati
     return upper(trip.trip_id).startsWith(a + "_") || (a === "LMT" && /^CM\d{1,3}[A-Z]?$/.test(upper(trip.route_id)));
   }
 
+  /**
+   * Routes whose drawn line passes within maxM metres of a point — used to work out which route
+   * a GPS bus is on when the feed doesn't say. Returns [{routeId, d}] sorted by distance.
+   */
+  function routeCandidates(st, lat, lon, maxM) {
+    maxM = maxM || 120;
+    const kx = Math.cos(lat * Math.PI / 180) * 111320, ky = 110540, out = [];
+    const shapes = (st && st.routeShapes) || {};
+    const pad = maxM / 100000;
+    Object.keys(shapes).forEach(rid => {
+      let best = Infinity;
+      for (const line of shapes[rid]) {
+        for (let i = 1; i < line.length; i++) {
+          const a = line[i - 1], b = line[i];
+          if ((lat < Math.min(a[0], b[0]) - pad) || (lat > Math.max(a[0], b[0]) + pad) || (lon < Math.min(a[1], b[1]) - pad) || (lon > Math.max(a[1], b[1]) + pad)) continue;
+          const ax = (a[1] - lon) * kx, ay = (a[0] - lat) * ky, bx = (b[1] - lon) * kx, by = (b[0] - lat) * ky;
+          const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L));
+          const d = Math.hypot(ax + t * dx, ay + t * dy); if (d < best) best = d;
+        }
+      }
+      if (best <= maxM) out.push({ routeId: rid, d: best });
+    });
+    return out.sort((x, y) => x.d - y.d);
+  }
+
   function nearestStop(idx, lat, lon) {
     let best = null, bd = Infinity;
     for (const s of idx.platforms) { const d = distanceM(lat, lon, s.lat, s.lon); if (d < bd) { bd = d; best = s; } }
@@ -522,7 +598,13 @@ message TranslatedString { repeated Translation translation=1; message Translati
       const route = resolveRoute(idx, trip.route_id, trip.trip_id);
       // Routes the producer runs but hasn't put in the schedule yet still count as LMT
       // when they carry an LMT route code (CM03) or an LMT synthetic trip id.
-      if (!route && requireKnown && !looksLikeAgency(trip, opts.agency)) { stats.foreign++; continue; }
+      // The producer sometimes omits route_id and uses opaque trip ids; a vehicle can still be accepted
+      // by its registration plate (e.g. WP-NE-6506) when the caller supplies a plate pattern.
+      const vplate = norm(vd.license_plate) || norm(vd.label) || norm(vd.id);
+      const byPlate = !route && opts.platePattern && opts.platePattern.test(upper(vplate)) &&
+        !/^(SIM|TEST|DEV|SUN|DEMO)[-_]/.test(upper(vplate)); // simulator/test devices (the producer rejects these too)
+      if (!route && requireKnown && !byPlate && !looksLikeAgency(trip, opts.agency)) { stats.foreign++; continue; }
+      if (byPlate) stats.unrouted = (stats.unrouted || 0) + 1;
       const id = norm(vd.id) || norm(vd.license_plate) || norm(vd.label) || norm(e.id);
       if (!id) { stats.invalid++; continue; }
       const prev = out.get(id);
@@ -680,7 +762,7 @@ message TranslatedString { repeated Translation translation=1; message Translati
   }
 
   return { GTFS_RT_PROTO, SERVICE_AREA, SRI_LANKA, OCCUPANCY, STOP_STATUS, CAUSE, EFFECT,
-    parseCsv, buildStatic, indexStatic, gtfsTime, localParts, scheduledVehicles, tripUpcoming, departures, resolveRoute, guessRouteCode, nearestStop,
+    parseCsv, buildStatic, indexStatic, gtfsTime, routeCandidates, decodePolyline, attachRail, localParts, scheduledVehicles, tripUpcoming, departures, resolveRoute, guessRouteCode, nearestStop,
     processVehicles, jsonListToFeed, processTripUpdates, processAlerts,
     distanceM, bearingDeg, inArea, toSeconds, translate, contrastText, minutesUntil, ago, localMinutes };
 });

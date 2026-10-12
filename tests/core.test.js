@@ -225,3 +225,38 @@ test("bundled SLR station fixes are well-formed and inside Sri Lanka", () => {
   assert.ok(FIX.ST_SANKATHANAI && FIX.ST_ELIPHANT_PASS, "the two stations that shared one wrong coordinate are fixed");
   assert.notDeepEqual(FIX.ST_SANKATHANAI, FIX.ST_ELIPHANT_PASS);
 });
+
+test("polyline decoding (Google format)", () => {
+  assert.deepEqual(C.decodePolyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@"), [[38.5, -120.2], [40.7, -120.95], [43.252, -126.453]]);
+});
+
+test("trains follow attached track geometry between stations, and lines are rebuilt from it", () => {
+  // A detour inland between Kollupitiya and Wellawatte: the train must pass through it.
+  const enc = p => { let o = "", pl = 0, pn = 0; const e = v => { v = v < 0 ? ~(v << 1) : v << 1; let x = ""; while (v >= 0x20) { x += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; } return x + String.fromCharCode(v + 63); };
+    p.forEach(([a, b]) => { const A = Math.round(a * 1e5), B = Math.round(b * 1e5); o += e(A - pl) + e(B - pn); pl = A; pn = B; }); return o; };
+  const geo = { "ST_KOLLUPITIYA|ST_WELLAWATTE": enc([[6.9110, 79.8490], [6.8925, 79.8800], [6.8740, 79.8570]]) };
+  const st = C.attachRail(C.buildStatic(F.slrFiles(NOW), { agency: "SLR", schedule: true }), geo);
+  assert.equal(st.routeShapes.COAST_LINE.length, 1, "route line rebuilt from the track pairs its trips use");
+  assert.ok(!JSON.stringify(st).includes("_railCache") && !("rail" in JSON.parse(JSON.stringify(st.schedule))), "geometry is not serialised into the cache");
+  let maxLon = 0;
+  for (let m = 0; m < 40; m++) {
+    const v = C.scheduledVehicles(st, { now: NOW + m * 30 }).find(x => x.id === "TR_1");
+    if (v && v.lat < 6.905 && v.lat > 6.88) maxLon = Math.max(maxLon, v.lon);
+  }
+  assert.ok(maxLon > 79.87, "train swung inland along the track instead of the straight coastal line");
+});
+
+test("live buses without route_id are accepted by registration plate (feed format of 2026-10-12)", () => {
+  const plate = /^(?:[A-Z]{2}-)?[A-Z]{2,3}-\d{3,4}$|^[A-Z]{2,3}\d{4}$/;
+  const strict = C.processVehicles(decode(F.unroutedFeed(NOW)), idx, { now: NOW, maxAgeSec: 1800 });
+  assert.equal(strict.vehicles.length, 0, "without a plate pattern they look like another agency's vehicles");
+  const r = C.processVehicles(decode(F.unroutedFeed(NOW)), idx, { now: NOW, maxAgeSec: 1800, platePattern: plate, agency: "LMT" });
+  assert.deepEqual(r.vehicles.map(v => v.id).sort(), ["WP-NE-6506", "WP-NE-6510", "WP-NE-6514"]);
+  assert.equal(r.vehicles.find(v => v.id === "WP-NE-6510").stale, true);
+  assert.equal(r.stats.unrouted, 3);
+});
+
+test("routeCandidates finds the route whose line passes a bus", () => {
+  assert.deepEqual(C.routeCandidates(st, 6.8722, 79.8888, 120).map(c => C.indexStatic(st).byId.get(c.routeId).short), ["CM01"]);
+  assert.deepEqual(C.routeCandidates(st, 6.9600, 79.9800, 120), []);
+});

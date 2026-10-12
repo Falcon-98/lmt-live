@@ -34,6 +34,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(404); return res.end();
     }
     if (agency !== "LMT") { res.writeHead(400); return res.end("agency param missing"); }
+    if (mode === "lmt-unrouted") {
+      if (ep === "gtfs/download") return send(await F.staticZip(), "application/zip");
+      if (ep === "realtime/vehicle-positions") return send(F.unroutedFeed(now), "application/x-protobuf");
+      if (ep.startsWith("realtime/vehicle-positions/list")) return send("[]", "application/json");
+      return send(F.emptyFeed(now), "application/x-protobuf");
+    }
     if (mode === "lmt-empty") {
       if (ep === "gtfs/download") return send(await F.lmtScheduledZip(now), "application/zip");
       if (ep.startsWith("realtime/vehicle-positions/list")) return send("[]", "application/json");
@@ -77,7 +83,8 @@ try {
   await page.waitForFunction(() => document.querySelectorAll(".veh.bus").length >= 4 && document.querySelectorAll(".veh.train").length >= 4, null, { timeout: 15000 });
   await page.waitForTimeout(1500);
   check((await page.locator(".veh.bus").count()) === 4, "exactly 4 LMT buses (stale, duplicate, train, out-of-area and 0,0 records dropped)");
-  check((await page.locator(".veh.bus .tag").allTextContents()).sort().join() === "CM01,CM02,CM02,CM05", "3D bus markers labelled with resolved route codes");
+  const tags0 = (await page.locator(".veh.bus .tag").allTextContents()).sort().join();
+  check(tags0 === "CM01,CM02,CM02,CM05", "3D bus markers labelled with resolved route codes (" + tags0 + ")");
   check((await page.locator(".veh.bus svg.g").count()) === 4, "buses drawn as 3D SVG vehicles");
   check((await page.locator(".veh.bus.stale").count()) === 1, "4-minute-old bus faded as stale");
   check((await page.locator(".veh.bus.moving").count()) >= 2, "moving buses animate (bob + wheel spin)");
@@ -88,7 +95,8 @@ try {
   check(new Set(wb).size === 2, "two trains waiting at Colombo Fort are fanned out, not stacked");
   check(await page.locator("#c-routes").textContent() === "3", "3 routes (2 bus + 1 rail line)");
   check(await page.locator("#c-stops").textContent() === "15", "15 stops (9 bus stops + 6 stations)");
-  check((await page.locator(".leaflet-routes-pane path").count()) === 3, "2 CM01 shapes + Coast Line drawn");
+  const nPaths = await page.locator(".leaflet-routes-pane path").count();
+  check(nPaths >= 3, "2 CM01 shapes + Coast Line drawn (" + nPaths + " track pieces)");
   check(/Live · 4 buses · 1 live train \+ 1 ⏱ scheduled \+ 2 ⏳ departing/.test(await page.locator("#status").textContent()), "status line counts live, scheduled and departing");
   check(await page.locator("#h-bus").getAttribute("class") === "dot ok" && await page.locator("#h-train").getAttribute("class") === "dot ok", "bus and train feeds healthy");
   check(await page.locator("#c-alerts").textContent() === "3", "3 alerts (2 bus + 1 rail)");
@@ -232,6 +240,22 @@ try {
   check(p5.errors.length === 0, "no page errors" + (p5.errors.length ? ": " + p5.errors.join(" | ") : ""));
   await p5.page.screenshot({ path: path.join(SHOTS, "lmt-empty.png") });
   await p5.page.close();
+
+  console.log("Live buses without route_id (feed format of 2026-10-12)");
+  mode = "lmt-unrouted";
+  const p6 = await open({ width: 1280, height: 800 }, "/?api=" + encodeURIComponent(base + "/api/v1") + "&trains=0");
+  await p6.page.waitForFunction(() => document.querySelectorAll(".veh.bus.gps").length >= 3, null, { timeout: 15000 });
+  await p6.page.waitForTimeout(600);
+  const tags6 = (await p6.page.locator(".veh.bus .tag").allTextContents()).sort();
+  check((await p6.page.locator(".veh.bus.gps").count()) === 3, "3 real GPS buses shown (45-min-old record and non-plate id dropped)");
+  check(tags6.includes("CM01") && tags6.includes("LMT"), "route worked out from position (CM01), unknown shown as LMT (" + tags6.join(",") + ")");
+  check((await p6.page.locator(".veh.bus.stale").count()) === 1, "20-minute-old position shown faded");
+  check(!(await p6.page.locator("#banner.show").count()), "no 'GPS offline' banner when buses report");
+  await p6.page.locator('[data-veh="LMT:WP-NE-6506"]').click(); await p6.page.waitForTimeout(500);
+  check(/worked out from its position/.test(await p6.page.locator(".leaflet-popup .pop").textContent()), "popup explains the inferred route");
+  check(p6.errors.length === 0, "no page errors" + (p6.errors.length ? ": " + p6.errors.join(" | ") : ""));
+  await p6.page.screenshot({ path: path.join(SHOTS, "unrouted.png") });
+  await p6.page.close();
 
   console.log("Feed down (no cache)");
   mode = "down";

@@ -171,7 +171,19 @@ async function lmtScheduledZip(now) {
   zip.file("calendar.txt", "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nSERV_LMT_DAILY,1,1,1,1,1,1,1,20200101,20991231\n");
   return zip.generateAsync({ type: "nodebuffer" });
 }
+/** The live feed as observed on 2026-10-12: no route_id, UUID trip ids, plates as vehicle ids. */
+function unroutedFeed(now) {
+  const t = Math.round(now), v = (id, lat, lon, age) => ({ id: "vehicle-position-" + id, vehicle: { trip: { trip_id: "ead19b2c-057c-4c2b-a7f8-" + id.padStart(12, "0") },
+    vehicle: { id, label: id, license_plate: id }, position: { latitude: lat, longitude: lon, bearing: 349, speed: 26.7 }, timestamp: t - age } });
+  return encode({ header: { gtfs_realtime_version: "2.0", timestamp: t }, entity: [
+    v("WP-NE-6506", 6.8722, 79.8888, 30),    // on the CM01 line (Nugegoda)
+    v("WP-NE-6514", 6.9600, 79.9800, 90),    // in Colombo but off every drawn line
+    v("WP-NE-6510", 6.9140, 79.8772, 1200),  // 20 min old: shown faded
+    v("WP-NE-6536", 6.9000, 79.9000, 2700),  // 45 min old: dropped
+    v("SIM-0001", 6.90, 79.90, 10)           // not a registration plate: dropped
+  ] });
+}
 function emptyFeed(now) { return encode({ header: { gtfs_realtime_version: "2.0", incrementality: "FULL_DATASET", timestamp: Math.round(now) }, entity: [] }); }
 
-module.exports = { CM01, CM02, files, staticZip, lmtScheduledZip, emptyFeed, vehiclesFeed, tripUpdatesFeed, alertsFeed, FeedMessage,
+module.exports = { CM01, CM02, files, staticZip, lmtScheduledZip, emptyFeed, unroutedFeed, vehiclesFeed, tripUpdatesFeed, alertsFeed, FeedMessage,
   slrFiles, slrZip, slrVehiclesFeed, slrTripUpdatesFeed, slrAlertsFeed, colombo };

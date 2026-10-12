@@ -45,14 +45,18 @@ It's a static site: no backend, no build step, no API key. Put the folder on any
 
 ---
 
-## Live data status (checked 11 Oct 2026)
+## Live data status (checked 12 Oct 2026)
 
 A diagnostic workflow ([`probe-feeds`](.github/workflows/probe-feeds.yml)) and a real-browser smoke test ([`live-smoke`](.github/workflows/live-smoke.yml)) query the live feeds from GitHub's servers. Their findings:
 
 - **CORS works.** The feed server allows the GitHub Pages origin (`https://falcon-98.github.io`), and the static GTFS downloads fine.
-- **The LMT live GPS feed is online but empty** (0 vehicles). The upstream bridge reports 38–40 buses in its registry, but its last telemetry poll was on **9 Oct 2026, 15:16 UTC**, so no positions are reaching the feed. This is a data-provider outage and can't be fixed from this app. Buses appear automatically as soon as the provider publishes positions again.
+- **LMT live GPS is back** (about 60 buses on 12 Oct 2026), but the producer changed its format: positions no longer carry a `route_id`, and `trip_id`s are random UUIDs that don't match the timetable. The app used to drop these as "not LMT", which is why it sometimes showed only a handful of buses. Now:
+  - a vehicle with a real registration plate (e.g. `WP-NE-6506`) is accepted even without a route; simulator/test IDs (`SIM-…`, `TEST-…`) are still rejected;
+  - its route is **worked out from its position**: the route lines within 120 m of the bus, kept sticky between refreshes. Where several routes share a road, the popup says "one of …";
+  - a position is kept for up to 30 minutes after its last report, so buses that report infrequently don't flicker away;
+  - if a route or mode filter is hiding buses, a notice says so with a **Show all** button.
 - **Trip updates are stale** (55–100 days old), so the app ignores updates older than 2 hours.
-- **The LMT timetable now covers 7 routes, 185 stops and 56 trips.** While GPS is empty, the app places buses at their **⏱ scheduled positions** and labels them as such. A banner explains that live GPS is unavailable.
+- **The LMT timetable covers 7 routes, 185 stops and 56 trips.** When there is little or no GPS, the app places buses at their **⏱ scheduled positions** and labels them as such. Route CM06 has no line or trips in the feed, so it can't be drawn.
 
 Run either workflow from the Actions tab to re-check at any time; `live-smoke` also runs every 6 hours.
 
@@ -72,13 +76,19 @@ The result is written to [`assets/station-fixes.js`](assets/station-fixes.js) an
 
 To re-check after the feed changes: run the `osm-stations` workflow, then `node tools/fix-stations.mjs <unzipped SLR GTFS dir>`.
 
+### Real track geometry
+
+The feed's own train shapes are coarse, so trains used to cut across fields between stations. [`tools/build-rail.mjs`](tools/build-rail.mjs) now routes every consecutive station pair on all 9 lines (650 pairs, 0 failures) over the **OpenStreetMap railway network** and writes the result to [`assets/rail-geometry.js`](assets/rail-geometry.js). Trains and route lines follow the real track, including the hill-country Main line. 8 stations that sat off the track (Udhamulla, Yapahuwa, Piladuwa, Murunkan, Buthgamuwa, Yatirawana, Pathanpha, Yatawara) were moved onto it. An audit is in [`data/rail-audit.json`](data/rail-audit.json).
+
+To rebuild: run the [`data-snapshots`](.github/workflows/data-snapshots.yml) workflow (it saves OSM track and the GTFS zips to the `data-snapshots` branch), check that branch out, then `node tools/build-rail.mjs <snapshot dir>`.
+
 ## How trains are tracked
 
 The feed server carries the complete SLR timetable: 9 lines, about 500 trips with stop times, and track shapes. As far as public sources show, it has **not documented a live GPS feed for trains**. So trains are shown in layers, with each train labelled by where its data comes from:
 
 1. **Live GPS** (`● GPS`): taken from `/realtime/vehicle-positions?agency=SLR` whenever the server publishes it. The train's headsign and next stops are filled in from the timetable.
 2. **Live delays and cancellations**: taken from `/realtime/trip-updates?agency=SLR` and applied to timetable positions and departure boards.
-3. **Timetable estimate** (`⏱ timetable`): when there's no GPS for a train, it is placed where the official timetable says it should be. It moves along the real track shape between stations (or in a straight line where the feed has no shape), waits at stations for the scheduled dwell time, and respects the service calendar and its exceptions. These trains look visibly different: slightly transparent, with a dashed tag.
+3. **Timetable estimate** (`⏱ timetable`): when there's no GPS for a train, it is placed where the official timetable says it should be. It moves along the real OpenStreetMap track between stations, waits at stations for the scheduled dwell time, and respects the service calendar and its exceptions. These trains look visibly different: slightly transparent, with a dashed tag.
 
 If the server doesn't publish train realtime at all, the Trains status light turns amber ("timetable only") rather than red, and buses are unaffected. Add `?trains=0` to the URL to hide trains completely.
 

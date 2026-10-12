@@ -351,3 +351,7 @@ kbd{font-family:var(--mono);font-size:.68rem;border:1px solid var(--line);border
 .grp{gap:8px}
 .grp span{white-space:nowrap;cursor:help}
 .row.waiting .s{white-space:normal}
+
+.focus.note{background:color-mix(in srgb,var(--warn) 12%,var(--surface));border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+.focus.note .btn{margin-left:auto}
+.btn.sm{padding:3px 9px;font-size:.76rem}
